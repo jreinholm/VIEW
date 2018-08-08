@@ -1,3 +1,4 @@
+var beep = require('interface/beep.js');
 var _ = require('underscore');
 var oled = null;
 var currentProgram = null;
@@ -6,7 +7,15 @@ var currentName = "";
 var stack = [];
 var screenSaverHandle = null;
 
+//var beepEnter = beep.sine(2954, 0.04);
+//var beepBack = beep.sine(1447, 0.04);
+//var beepClick = beep.sine(738, 0.02);
+var beepAlarm = beep.sine2(2954, 1540, 0.1);
+
+beep.enable(true);
+
 exports.busy = false;
+exports.audio = 'disabled';
 
 function activity() {
     oled.activity();
@@ -17,6 +26,7 @@ exports.init = function(menuController) {
 }
 
 function load(program, selected) {
+    if(!program) return;// exports.back();
     if (program.alternate && typeof program.alternate == "function") {
         var alternate = program.alternate();
         if (alternate !== false) {
@@ -88,6 +98,18 @@ function load(program, selected) {
         oled.text(currentProgram.name, currentProgram.value);
         oled.update();
     }
+    if (currentProgram.type == "numberInput") {
+        oled.number(currentProgram.name, currentProgram.value);
+        oled.update();
+    }
+    if (currentProgram.type == "timeInput") {
+        oled.time(currentProgram.name, currentProgram.value);
+        oled.update();
+    }
+    if (currentProgram.type == "dateInput") {
+        oled.date(currentProgram.name, currentProgram.value);
+        oled.update();
+    }
     if (currentProgram.type == "textDisplay") {
         oled.displayText(currentProgram.name, currentProgram.value);
         oled.update();
@@ -114,6 +136,10 @@ function load(program, selected) {
 
 exports.load = function(menuProgram, noPush, selected, forceStack) {
     exports.busy = false;
+    if(currentProgram && currentProgram.intervalHandle) {
+        clearInterval(currentProgram.intervalHandle)
+        currentProgram.intervalHandle = null;
+    }
     if ((forceStack && backupProgram != null) || (backupProgram != null && !noPush && backupProgram.type != "options" && backupProgram.type != "function")) {
         stack.push({
             program: backupProgram,
@@ -149,7 +175,7 @@ exports.up = function(alt) {
         oled.up();
     } else if(currentProgram.type == "textDisplay") {
         oled.up();
-    } else if(currentProgram.type == "textInput") {
+    } else if(currentProgram.type == "textInput" || currentProgram.type == "numberInput" || currentProgram.type == "timeInput" || currentProgram.type == "dateInput") {
         if(alt) {
             oled.textMoveBackward();
         } else {
@@ -164,7 +190,7 @@ exports.down = function(alt) {
         oled.down();
     } else if(currentProgram.type == "textDisplay") {
         oled.down();
-    } else if(currentProgram.type == "textInput") {
+    } else if(currentProgram.type == "textInput" || currentProgram.type == "numberInput" || currentProgram.type == "timeInput" || currentProgram.type == "dateInput") {
         if(alt) {
             oled.textMoveForward();
         } else {
@@ -183,6 +209,30 @@ exports.enter = function(alt) {
         } else {
             //console.log("resulting string", oled.getTextValue());
             if(currentProgram.onSave) currentProgram.onSave(oled.getTextValue());
+            back();
+        }
+    } else if (currentProgram.type == "numberInput") {
+        if(alt) {
+            oled.textMoveForward();
+        } else {
+            //console.log("resulting string", oled.getTextValue());
+            if(currentProgram.onSave) currentProgram.onSave(oled.getNumberValue());
+            back();
+        }
+    } else if (currentProgram.type == "timeInput") {
+        if(alt) {
+            oled.textMoveForward();
+        } else {
+            //console.log("resulting string", oled.getTextValue());
+            if(currentProgram.onSave) currentProgram.onSave(oled.getTimeValue());
+            back();
+        }
+    } else if (currentProgram.type == "dateInput") {
+        if(alt) {
+            oled.textMoveForward();
+        } else {
+            //console.log("resulting string", oled.getTextValue());
+            if(currentProgram.onSave) currentProgram.onSave(oled.getDateValue());
             back();
         }
     } else if (currentProgram.type == "png") {
@@ -214,14 +264,27 @@ exports.help = function() {
         });
     }
 }
-exports.alert = function(title, text) {
+exports.alert = function(title, text, updateInterval, audioAlert) {
     activity();
+    if(audioAlert && exports.audio != 'disabled') beep.play(beepAlarm, 3, 0.2);
+    var f, intervalHandle = null;
+    if(typeof text === 'function') {
+        f = text;
+        text = f();
+        intervalHandle = setInterval(function() {
+            oled.updateDisplayText(f());
+        }, updateInterval||1000);
+    }
     exports.load({
         type: "textDisplay",
         origin: "alert",
         name: title,
-        value: text
+        value: text,
+        intervalHandle: intervalHandle
     });
+}
+exports.currentOrigin = function() {
+    return currentProgram.origin;
 }
 exports.dismissAlert = function() {
     activity();
@@ -230,6 +293,7 @@ exports.dismissAlert = function() {
 exports.button3 = function() {
     activity();
     if(exports.busy) return;
+    //beep.play(beepClick);
     if (currentProgram.type == "menu" && currentProgram.items[oled.selected] && currentProgram.items[oled.selected].button3) {
         currentProgram.items[oled.selected].button3(currentProgram.items[oled.selected]);
     } else if (currentProgram.type == "textInput") {
@@ -269,6 +333,7 @@ exports.backButton = function() {
     if (stack.length > 0) {
         activity();
         if(exports.busy) return;
+        //beep.play(beepBack);
         back();
     } else {
         if (oled.visible) oled.hide();
@@ -279,6 +344,7 @@ exports.set = function(object, key, value, callback) {
     return {
         type: "function",
         fn: function(arg, cb) {
+            console.log("ui.set: " + key + " = " + value);
             object[key] = value;
             if(callback) {
                 callback(cb);

@@ -1,10 +1,27 @@
 var lists = {};
 
+lists.fixedApertureEv = -4;
+
 lists.paramMap = [{
     name: "target",
     maps: [{
         section: "settings",
         item: "capturetarget"
+    },{
+        section: "other", // fuji
+        item: "d20c"
+    }]
+}, {
+    name: "recordingmedia",
+    maps: [{
+        section: "settings",
+        item: "recordingmedia"
+    }]
+}, {
+    name: "battery",
+    maps: [{
+        section: "status",
+        item: "batterylevel"
     }]
 }, {
     name: "autofocus",
@@ -18,6 +35,42 @@ lists.paramMap = [{
     maps: [{
         section: "actions",
         item: "viewfinder"
+    }, {
+        section: "other",
+        item: "d06d"
+    }]
+}, {
+    name: "lvexposure",
+    maps: [{
+        section: "other",
+        item: "d1a5"
+    }]
+}, {
+    name: "afmode",
+    maps: [{
+//        section: "other",
+//        item: "d161"
+//    }, {
+        section: "capturesettings",
+        item: "focusmode"
+    }]
+}, {
+    name: "fujifocus",
+    maps: [{
+        section: "other",
+        item: "500a"
+    }]
+}, {
+    name: "fujifocuspos",
+    maps: [{
+        section: "other",
+        item: "d171"
+    }]
+}, {
+    name: "sonyfocus",
+    maps: [{
+        section: "actions",
+        item: "manualfocus"
     }]
 }, {
     name: "focusdrive",
@@ -40,6 +93,15 @@ lists.paramMap = [{
     maps: [{
         section: "imgsettings",
         item: "iso"
+    }, {
+        section: "other",
+        item: "500f"
+    }, {
+        section: "other",
+        item: "d007"
+    }, {
+        section: null,
+        item: 'isoSpeedRate'
     }]
 }, {
     name: "aperture",
@@ -49,6 +111,15 @@ lists.paramMap = [{
     }, {
         section: "capturesettings",
         item: "f-number"
+    }, {
+        section: "other",
+        item: "5007"
+    }, {
+        section: "other",
+        item: "d002"
+    }, {
+        section: null,
+        item: "fNumber"
     }]
 }, {
     name: "shutter",
@@ -58,6 +129,15 @@ lists.paramMap = [{
     }, {
         section: "capturesettings",
         item: "shutterspeed"
+    }, {
+        section: "other",
+        item: "500d"
+    }, {
+        section: "other",
+        item: "d01c"
+    }, {
+        section: null,
+        item: "shutterSpeed"
     }]
 }];
 
@@ -129,10 +209,12 @@ lists.getSecondsFromEv = function(ev) { // only accurate to 1/3 stop
             return lists.bulb[i].us / 1000000;
         }
     }
-    return 1;
+    return 0.1;
 }
 
 lists.getEv = function(shutter, aperture, iso) {
+    if(shutter == null || aperture == null || iso == null) return null;
+    
     if (shutter.ev) shutterEv = shutter.ev;
     else shutterEv = shutter;
     if (aperture.ev) apertureEv = aperture.ev;
@@ -146,6 +228,15 @@ lists.incEv = function(current, itemList) {
     var i;
     itemList = lists.cleanEvCopy(itemList);
     if (!itemList || itemList.length == 0) return false;
+    itemList.sort(function(a, b) {
+        if(a.ev > b.ev) {
+            return -1;
+        }
+        if(a.ev < b.ev) {
+            return 1;
+        }
+        return 0;
+    });
     if (itemList[0].ev > itemList[itemList.length - 1].ev) { // first is largest
         for (i = itemList.length - 1; i >= 0; i--) {
             if (itemList[i].ev > current.ev) {
@@ -166,6 +257,15 @@ lists.decEv = function(current, itemList) {
     var i;
     itemList = lists.cleanEvCopy(itemList);
     if (!itemList || itemList.length == 0) return false;
+    itemList.sort(function(a, b) {
+        if(a.ev > b.ev) {
+            return -1;
+        }
+        if(a.ev < b.ev) {
+            return 1;
+        }
+        return 0;
+    });
     if (itemList[0].ev > itemList[itemList.length - 1].ev) { // first is largest
         for (i = 0; i < itemList.length; i++) {
             if (itemList[i].ev < current.ev) {
@@ -189,20 +289,164 @@ function filterList(list, evMultiple) {
     });
 }
 
+
+lists.evStats = function(settings, options) {
+    var res = {};
+    if(settings.lists === undefined) return {ev:null};
+    var slists = settings.lists;
+    settings = settings.details;
+
+
+    var apertureEnabled = false;
+
+    var av;
+    if (settings.aperture && settings.aperture.ev != null) {
+        av = settings.aperture.ev;
+        if(options && options.parameters && options.parameters.indexOf('A') !== -1) apertureEnabled = true
+    } else {
+        apertureEnabled = false;
+        av = lists.fixedApertureEv;
+    }
+
+    res.ev = null;
+    if (settings.shutter && settings.shutter.ev != null && settings.iso && settings.iso.ev != null) res.ev = lists.getEv(settings.shutter.ev, av, settings.iso.ev);
+
+    res.shutterList = slists.shutter;
+    res.apertureList = slists.aperture;
+    res.isoList = slists.iso;
+
+    if(res.shutterList) res.shutterList = lists.cleanEvCopy(res.shutterList);
+    if(res.apertureList) res.apertureList = lists.cleanEvCopy(res.apertureList);
+    if(res.isoList) res.isoList = lists.cleanEvCopy(res.isoList);
+
+    if (res.shutterList && options && options.maxShutterLengthMs) {
+        var maxSeconds = Math.floor(options.maxShutterLengthMs / 1000);
+        if(maxSeconds < 1) maxSeconds = 1;
+        res.shutterList = res.shutterList.filter(function(item) {
+            return lists.getSecondsFromEv(item.ev) <= maxSeconds;
+        });
+    }
+    if (res.shutterList && options && options.shutterMax != null) {
+        res.shutterList = res.shutterList.filter(function(item) {
+            return item.ev >= options.shutterMax;
+        });
+    }
+    if (res.isoList && options && options.isoMax != null) {
+        res.isoList = res.isoList.filter(function(item) {
+            return item.ev >= options.isoMax;
+        });
+    }
+    if (res.isoList && options && options.isoMin != null) {
+        res.isoList = res.isoList.filter(function(item) {
+            return item.ev <= options.isoMin;
+        });
+    }
+    if (res.apertureList && options && options.apertureMax != null) {
+        res.apertureList = res.apertureList.filter(function(item) {
+            return item.ev <= options.apertureMax;
+        });
+    }
+    if (res.apertureList && options && options.apertureMin != null) {
+        res.apertureList = res.apertureList.filter(function(item) {
+            return item.ev >= options.apertureMin;
+        });
+    }
+
+    res.shutterEvMin = lists.getMinEv(res.shutterList);
+    res.shutterEvMax = lists.getMaxEv(res.shutterList);
+
+    if(apertureEnabled) {
+        res.apertureEvMin = lists.getMinEv(res.apertureList);
+        res.apertureEvMax = lists.getMaxEv(res.apertureList);
+    } else {
+        res.apertureEvMin = av;
+        res.apertureEvMax = av;
+    }
+    
+    res.isoEvMin = lists.getMinEv(res.isoList);
+    res.isoEvMax = lists.getMaxEv(res.isoList);
+
+    res.minEv = res.shutterEvMin + 6 + res.apertureEvMin + 8 + res.isoEvMin;
+    res.maxEv = res.shutterEvMax + 6 + res.apertureEvMax + 8 + res.isoEvMax;
+
+    return res;
+}
+
+lists.getEvFromSettings = function(cameraSettings) {
+    var settings = cameraSettings.details;
+    var av = (settings.aperture && settings.aperture.ev != null) ? settings.aperture.ev : lists.fixedApertureEv;
+
+    if(settings && settings.shutter && settings.iso) {
+        return lists.getEv(settings.shutter.ev, av, settings.iso.ev);
+    } else {
+        return null;
+    }
+}
+
+
 lists.format = [{
     name: "RAW",
-    values: ['RAW', 'raw', 'NEF (Raw)', 'mRAW', 'sRAW']
+    values: ['RAW', 'raw', 'NEF (Raw)', 'mRAW', 'sRAW', '3', 'NEF+Fine']
 }, {
     name: "RAW+JPEG",
-    values: ['RAW+JPEG', 'raw+jpeg']
+    values: ['RAW+JPEG', 'raw+jpeg', 'Unknown value 0012']
 }];
 
 lists.target = [{
     name: "RAM",
-    values: ['Internal RAM']
+    values: ['Internal RAM', '4']
 }, {
     name: "CARD",
-    values: ['Memory card']
+    values: ['Memory card', '2']
+}];
+
+lists.recordingmedia = [{
+    name: "RAM",
+    values: ['SDRAM']
+}, {
+    name: "CARD",
+    values: ['Card']
+}];
+
+lists.lvexposure = [{
+    name: "off",
+    values: ['0']
+}, {
+    name: "on",
+    values: ['1']
+}];
+
+lists.fujifocus = [{
+    name: "enabled",
+    values: ['1']
+}, {
+    name: "afonly1",
+    values: ['32769']
+}, {
+    name: "afonly2",
+    values: ['32770']
+}];
+
+lists.sonyfocus = [{
+    name: "enabled",
+    values: ['0']
+}];
+
+lists.afmode = [{
+    name: "manual",
+    values: ['4', 'Manual']
+}, {
+    name: "af0",
+    values: ['0', 'AF-S']
+}, {
+    name: "af1",
+    values: ['1', 'AF-C']
+}, {
+    name: "af2",
+    values: ['2']
+}, {
+    name: "af3",
+    values: ['3']
 }];
 
 lists.autofocus = [{
@@ -215,7 +459,7 @@ lists.autofocus = [{
 
 lists.liveview = [{
     name: "on",
-    values: ['2']
+    values: ['2', '67109632']
 }, {
     name: "on-dark",
     values: ['1']
@@ -236,7 +480,7 @@ lists.focusdrive = [{
 lists.isoAll = [{
     name: "Auto",
     ev: null,
-    values: ['Auto', 'auto', 'AUTO']
+    values: ['auto', 'auto iso']
 }, {
     name: "25",
     ev: 2,
@@ -474,123 +718,135 @@ lists.iso = lists.isoThirds;
 lists.apertureAll = [{
     name: "1.0",
     ev: -8,
-    values: ['1.0', 'f/1.0', 'f1.0', 'f/1']
+    values: ['1', '1.0', 'f/1.0', 'f1.0', 'f/1', '1,0']
 }, {
     name: "1.1",
     ev: -7 - 2 / 3,
-    values: ['1.1', 'f/1.1', 'f1.1']
+    values: ['1.1', 'f/1.1', 'f1.1', '1,1']
 }, {
     name: "1.2",
     ev: -7.5,
-    values: ['1.2', 'f/1.2', 'f1.2']
+    values: ['1.2', 'f/1.2', 'f1.2', '1,2']
 }, {
     name: "1.2",
     ev: -7 - 1 / 3,
-    values: ['1.2', 'f/1.2', 'f1.2']
+    values: ['1.2', 'f/1.2', 'f1.2', '1,2', '120']
 }, {
     name: "1.4",
     ev: -7,
-    values: ['1.4', 'f/1.4', 'f1.4']
+    values: ['1.4', 'f/1.4', 'f1.4', '1,4', '140']
 }, {
     name: "1.6",
     ev: -6 - 2 / 3,
-    values: ['1.6', 'f/1.6', 'f1.6']
+    values: ['1.6', 'f/1.6', 'f1.6', '1,6', '160']
 }, {
     name: "1.7",
     ev: -6.5,
-    values: ['1.7', 'f/1.7', 'f1.7']
+    values: ['1.7', 'f/1.7', 'f1.7', '1,7']
 }, {
     name: "1.8",
     ev: -6 - 1 / 3,
-    values: ['1.8', 'f/1.8', 'f1.8']
+    values: ['1.8', 'f/1.8', 'f1.8', '1,8', '180']
 }, {
     name: "2.0",
     ev: -6,
-    values: ['2.0', 'f/2.0', 'f2.0', 'f/2']
+    values: ['2', '2.0', 'f/2.0', 'f2.0', 'f/2', '200']
 }, {
     name: "2.2",
     ev: -5 - 2 / 3,
-    values: ['2.2', 'f/2.2', 'f2.2']
+    values: ['2.2', 'f/2.2', 'f2.2', '2,2', '220']
 }, {
     name: "2.4",
     ev: -5.5,
-    values: ['2.4', 'f/2.4', 'f2.4']
+    values: ['2.4', 'f/2.4', 'f2.4', '2,4']
 }, {
     name: "2.5",
     ev: -5 - 1 / 3,
-    values: ['2.5', 'f/2.5', 'f2.5']
+    values: ['2.5', 'f/2.5', 'f2.5', '2,5', '250']
 }, {
     name: "2.8",
     ev: -5,
-    values: ['2.8', 'f/2.8', 'f2.8']
+    values: ['2.8', 'f/2.8', 'f2.8', '2,8', '280']
 }, {
     name: "3.2",
     ev: -4 - 2 / 3,
-    values: ['3.2', 'f/3.2', 'f3.2']
+    values: ['3.2', 'f/3.2', 'f3.2', '3,2', '320']
 }, {
     name: "3.3",
     ev: -4.5,
-    values: ['3.3', 'f/3.3', 'f3.3']
+    values: ['3.3', 'f/3.3', 'f3.3', '3,3']
 }, {
     name: "3.5",
     ev: -4 - 1 / 3,
-    values: ['3.5', 'f/3.5', 'f3.5']
+    values: ['3.5', 'f/3.5', 'f3.5', '3,5', '350']
+}, {
+    name: "3.8",
+    ev: -4.25,
+    values: ['3.8', 'f/3.8', 'f3.8', '3,8']
 }, {
     name: "4",
     ev: -4,
-    values: ['4', 'f/4', 'f4', 'f4.0']
+    values: ['4', 'f/4', 'f4', 'f4.0', '4.0', '4,0', '400']
+}, {
+    name: "4.2",
+    ev: -3.75,
+    values: ['4.2', 'f/4.2', 'f4.2', '4.2', '4,2']
 }, {
     name: "4.5",
     ev: -3 - 2 / 3,
-    values: ['4.5', 'f/4.5', 'f4.5']
+    values: ['4.5', 'f/4.5', 'f4.5', '4,5', '450']
 }, {
     name: "4.8",
     ev: -3.5,
-    values: ['4.8', 'f/4.8', 'f4.8']
+    values: ['4.8', 'f/4.8', 'f4.8', '4,8']
 }, {
     name: "5",
     ev: -3 - 1 / 3,
-    values: ['5', 'f/5', 'f5']
+    values: ['5', 'f/5', 'f5', '5.0', '5,0', '500']
+}, {
+    name: "5.3",
+    ev: -3.25,
+    values: ['5.3', 'f/5.3', 'f5.3', '5.3', '5,3']
 }, {
     name: "5.6",
     ev: -3,
-    values: ['5.6', 'f/5.6', 'f5.6']
+    values: ['5.6', 'f/5.6', 'f5.6', '5,6', '560']
 }, {
     name: "6.3",
     ev: -2 - 2 / 3,
-    values: ['6.3', 'f/6.3', 'f6.3']
+    values: ['6.3', 'f/6.3', 'f6.3', '6,3', '640']
 }, {
     name: "6.7",
     ev: -2.5,
-    values: ['6.7', 'f/6.7', 'f6.7']
+    values: ['6.7', 'f/6.7', 'f6.7', '6,7']
 }, {
     name: "7.1",
     ev: -2 - 1 / 3,
-    values: ['7.1', 'f/7.1', 'f7.1']
+    values: ['7.1', 'f/7.1', 'f7.1', '7,1', '710']
 }, {
     name: "8",
     ev: -2,
-    values: ['8', 'f/8', 'f8']
+    values: ['8', 'f/8', 'f8', '8.0', '8,0', '800']
 }, {
     name: "9",
     ev: -1 - 2 / 3,
-    values: ['9', 'f/9', 'f9']
+    values: ['9', 'f/9', 'f9', '9.0', '9,0', '900']
 }, {
     name: "9.5",
     ev: -1.5,
-    values: ['9.5', 'f/9.5', 'f9.5']
+    values: ['9.5', 'f/9.5', 'f9.5', '9,5']
 }, {
     name: "10",
     ev: -1 - 1 / 3,
-    values: ['10', 'f/10', 'f10']
+    values: ['10', 'f/10', 'f10', '1000']
 }, {
     name: "11",
     ev: -1,
-    values: ['11', 'f/11', 'f11']
+    values: ['11', 'f/11', 'f11', '1100']
 }, {
     name: "13",
     ev: -2 / 3,
-    values: ['13', 'f/13', 'f13']
+    values: ['13', 'f/13', 'f13', '1300']
 }, {
     name: "13",
     ev: -0.5,
@@ -598,15 +854,15 @@ lists.apertureAll = [{
 }, {
     name: "14",
     ev: -1 / 3,
-    values: ['14', 'f/14', 'f14']
+    values: ['14', 'f/14', 'f14', '1400']
 }, {
     name: "16",
     ev: 0,
-    values: ['16', 'f/16', 'f16']
+    values: ['16', 'f/16', 'f16', '1600']
 }, {
     name: "18",
     ev: 1 / 3,
-    values: ['18', 'f/18', 'f18']
+    values: ['18', 'f/18', 'f18', '1800']
 }, {
     name: "19",
     ev: 0.5,
@@ -614,11 +870,11 @@ lists.apertureAll = [{
 }, {
     name: "20",
     ev: 2 / 3,
-    values: ['20', 'f/20', 'f20']
+    values: ['20', 'f/20', 'f20', '2000']
 }, {
     name: "22",
     ev: 1,
-    values: ['22', 'f/22', 'f22']
+    values: ['22', 'f/22', 'f22', '2200']
 }, {
     name: "25",
     ev: 1 + 1 / 3,
@@ -631,6 +887,10 @@ lists.apertureAll = [{
     name: "32",
     ev: 2,
     values: ['32', 'f/32', 'f32']
+}, {
+    name: "35",
+    ev: 2.5,
+    values: ['35', 'f/35', 'f35']
 }, {
     name: "36",
     ev: 2 + 1 / 3,
@@ -648,125 +908,157 @@ lists.shutterAll = [{
     ev: null,
     values: ['Bulb', 'bulb', '65535/65535']
 }, {
+    name: "Auto",
+    ev: null,
+    values: ['Auto', 'auto', '-1']
+//}, {
+//    name: "15m",
+//    ev: -16,
+//    values: ['640000120']
+//}, {
+//    name: "8m",
+//    ev: -15,
+//    values: ['64000090']
+//}, {
+//    name: "4m",
+//    ev: -14,
+//    values: ['64000060']
+//}, {
+//    name: "2m",
+//    ev: -13,
+//    values: ['64000030']
+//}, {
+//    name: "60s",
+//    ev: -12,
+//    values: ['64000000', '60']
+//}, {
+//    name: "50s",
+//    ev: -11 - 2 / 3,
+//    values: ['50796833', '50']
+//}, {
+//    name: "40s",
+//    ev: -11 - 1 / 3,
+//    values: ['40317473', '40']
+}, {
     name: "30s",
     ev: -11,
-    values: ['300/10', '30', '30.0000s']
+    values: ['300/10', '30', '30.0000s', '30"', '32000000', '19660810']
 }, {
     name: "25s",
     ev: -10 - 2 / 3,
-    values: ['250/10', '25', '25.0000s']
+    values: ['250/10', '25', '25.0000s', '25"', '25398416', '16384010']
 }, {
     name: "24s",
     ev: -10.5,
-    values: ['240/10', '24', '24.0000s']
+    values: ['240/10', '24', '24.0000s', '24"']
 }, {
     name: "20s",
     ev: -10 - 1 / 3,
-    values: ['200/10', '20', '20.0000s']
+    values: ['200/10', '20', '20.0000s', '20"', '20158736', '13107210']
 }, {
     name: "15s",
     ev: -10,
-    values: ['150/10', '15', '15.0000s']
+    values: ['150/10', '15', '15.0000s', '15"', '16000000', '9830410']
 }, {
     name: "13s",
     ev: -9 - 2 / 3,
-    values: ['130/10', '13', '13.0000s']
+    values: ['130/10', '13', '13.0000s', '13"', '12699208', '8519690']
 }, {
     name: "12s",
     ev: -9.5,
-    values: ['120/10', '12', '12.0000s']
+    values: ['120/10', '12', '12.0000s', '12"']
 }, {
     name: "10s",
     ev: -9 - 1 / 3,
-    values: ['100/10', '10', '10.0000s']
+    values: ['100/10', '10', '10.0000s', '10"', '10079368', '6553610']
 }, {
     name: "8s",
     ev: -9,
-    values: ['80/10', '8', '8.0000s']
+    values: ['80/10', '8', '8.0000s', '8"', '8000000', '5242890']
 }, {
     name: "6s",
     ev: -8 - 2 / 3,
-    values: ['60/10', '6', '6.0000s']
+    values: ['60/10', '6', '6.0000s', '6"', '6349604', '3932170']
 }, {
     name: "6s",
     ev: -8.5,
-    values: ['60/10', '6', '6.0000s']
+    values: ['60/10', '6', '6.0000s', '6"']
 }, {
     name: "5s",
     ev: -8 - 1 / 3,
-    values: ['50/10', '5', '5.0000s']
+    values: ['50/10', '5', '5.0000s', '5"', '5039684', '3276810']
 }, {
     name: "4s",
     ev: -8,
-    values: ['40/10', '4', '4.0000s']
+    values: ['40/10', '4', '4.0000s', '4"', '4000000', '2621450']
 }, {
     name: "3s",
     ev: -7 - 2 / 3,
-    values: ['32/10', '3', '3.2', '3.2000s']
+    values: ['32/10', '3', '3.2', '3.2000s', '3.2"', '3,2"', '3174802', '2097162']
 }, {
     name: "3s",
     ev: -7.5,
-    values: ['30/10', '3', '3.0', '3.0000s']
+    values: ['30/10', '3', '3.0', '3.0000s', '3"']
 }, {
     name: "2.5s",
     ev: -7 - 1 / 3,
-    values: ['25/10', '2.5', '2.5000s']
+    values: ['25/10', '2.5', '2.5000s', '2.5"', '2,5"', '2519842', '1638410']
 }, {
     name: "2s",
     ev: -7,
-    values: ['20/10', '2', '2.0000s']
+    values: ['20/10', '2', '2.0000s', '2"', '2000000', '1310730']
 }, {
     name: "1.6s",
     ev: -6 - 2 / 3,
-    values: ['16/10', '1.6', '1.6000s']
+    values: ['16/10', '1.6', '1.6000s', '1.6"', '1,6"', '1414213', '1048586']
 }, {
     name: "1.5s",
     ev: -6.5,
-    values: ['15/10', '1.5', '1.5000s']
+    values: ['15/10', '1.5', '1.5000s', '1.5"', '1,5"']
 }, {
     name: "1.3s",
     ev: -6 - 1 / 3,
-    values: ['13/10', '1.3', '1.3000s']
+    values: ['13/10', '1.3', '1.3000s', '1.3"', '1,3"', '1259921', '851978']
 }, {
     name: "1s",
     ev: -6,
-    values: ['10/10', '1', '1.0000s', '10/10']
+    values: ['10/10', '1', '1.0000s', '10/10', '1"', '1000000', '655370']
 }, {
     name: "0.8s",
     ev: -5 - 2 / 3,
-    values: ['8/10', '0.8', '10/13', '0.7692s']
+    values: ['8/10', '1/1.3', '0.8', '10/13', '0.7692s', '0.8"', '0,8"', '793700', '655373']
 }, {
     name: "0.7s",
     ev: -5.5,
-    values: ['7/10', '0.7', '10/15', '0.7000s']
+    values: ['7/10', '0.7', '10/15', '0.7000s', '0.7"', '0,7"']
 }, {
     name: "0.6s",
     ev: -5 - 1 / 3,
-    values: ['6/10', '0.625', '0.6', '10/16', '0.6250s']
+    values: ['6/10', '1/1.6', '0.625', '0.6', '10/16', '0.6250s', '0.6"', '0,6"', '629960', '655376']
 }, {
     name: "1/2",
     ev: -5,
-    values: ['5/10', '0.5', '1/2', '0.5000s']
+    values: ['5/10', '0.5', '1/2', '0.5000s', '0.5"', '0,5"', '500000', '655380']
 }, {
     name: "0.4s",
     ev: -4 - 2 / 3,
-    values: ['4/10', '0.4', '10/25', '0.4000s']
+    values: ['4/10', '1/2.5', '0.4', '10/25', '0.4000s', '0.4"', '0,4"', '396850', '655385']
 }, {
     name: "1/3",
     ev: -4.5,
-    values: ['1/3', '0.3', '10/30', '0.3333s']
+    values: ['1/3', '0.3', '10/30', '0.3333s', '0,3"']
 }, {
     name: "1/3",
     ev: -4 - 1 / 3,
-    values: ['1/3', '0.3', '0.3125s']
+    values: ['1/3', '1/3.2', '0.3', '0.3125s', '314980', '65539']
 }, {
     name: "1/4",
     ev: -4,
-    values: ['1/4', '0.2500s']
+    values: ['1/4', '0.2500s', '250000', '65540']
 }, {
     name: "1/5",
     ev: -3 - 2 / 3,
-    values: ['1/5', '0.2000s']
+    values: ['1/5', '0.2000s', '198425', '65541']
 }, {
     name: "1/6",
     ev: -3.5,
@@ -774,15 +1066,15 @@ lists.shutterAll = [{
 }, {
     name: "1/6",
     ev: -3 - 1 / 3,
-    values: ['1/6', '0.1666s']
+    values: ['1/6', '0.1666s', '157490', '65542']
 }, {
     name: "1/8",
     ev: -3,
-    values: ['1/8', '0.1250s']
+    values: ['1/8', '0.1250s', '125000', '65544']
 }, {
     name: "1/10",
     ev: -2 - 2 / 3,
-    values: ['1/10', '0.1000s']
+    values: ['1/10', '0.1000s', '99212', '65546']
 }, {
     name: "1/10",
     ev: -2.5,
@@ -790,15 +1082,15 @@ lists.shutterAll = [{
 }, {
     name: "1/13",
     ev: -2 - 1 / 3,
-    values: ['1/13', '0.0769s']
+    values: ['1/13', '0.0769s', '78745', '65549']
 }, {
     name: "1/15",
     ev: -2,
-    values: ['1/15', '0.0666s']
+    values: ['1/15', '0.0666s', '62500', '65551']
 }, {
     name: "1/20",
     ev: -1 - 2 / 3,
-    values: ['1/20', '0.0500s']
+    values: ['1/20', '0.0500s', '49606', '65556']
 }, {
     name: "1/20",
     ev: -1.5,
@@ -806,15 +1098,15 @@ lists.shutterAll = [{
 }, {
     name: "1/25",
     ev: -1 - 1 / 3,
-    values: ['1/25', '0.0400s']
+    values: ['1/25', '0.0400s', '39372', '65561']
 }, {
     name: "1/30",
     ev: -1,
-    values: ['1/30', '0.0333s']
+    values: ['1/30', '0.0333s', '31250', '65566']
 }, {
     name: "1/40",
     ev: -2 / 3,
-    values: ['1/40', '0.0250s']
+    values: ['1/40', '0.0250s', '24803', '65576']
 }, {
     name: "1/45",
     ev: -0.5,
@@ -822,15 +1114,15 @@ lists.shutterAll = [{
 }, {
     name: "1/50",
     ev: -1 / 3,
-    values: ['1/50', '0.0200s']
+    values: ['1/50', '0.0200s', '19686', '65586']
 }, {
     name: "1/60",
     ev: 0,
-    values: ['1/60', '0.0166s']
+    values: ['1/60', '0.0166s', '15625', '65596']
 }, {
     name: "1/80",
     ev: 1 / 3,
-    values: ['1/80', '0.0125s']
+    values: ['1/80', '0.0125s', '12401', '65616']
 }, {
     name: "1/90",
     ev: 0.5,
@@ -838,31 +1130,31 @@ lists.shutterAll = [{
 }, {
     name: "1/100",
     ev: 2 / 3,
-    values: ['1/100', '0.0100s']
+    values: ['1/100', '0.0100s', '9843', '65636']
 }, {
     name: "1/125",
     ev: 1,
-    values: ['1/125', '0.0080s']
+    values: ['1/125', '0.0080s', '7812', '65661']
 }, {
     name: "1/160",
     ev: 1 + 1 / 3,
-    values: ['1/160', '0.0062s']
+    values: ['1/160', '0.0062s', '6200', '65696']
 }, {
     name: "1/180",
     ev: 1.5,
-    values: ['1/180', '0.0055s']
+    values: ['1/180', '0.0055s', '5524']
 }, {
     name: "1/200",
     ev: 1 + 2 / 3,
-    values: ['1/200', '0.0050s']
+    values: ['1/200', '0.0050s', '4921', '65736']
 }, {
     name: "1/250",
     ev: 2,
-    values: ['1/250', '0.0040s']
+    values: ['1/250', '0.0040s', '3906', '65786']
 }, {
     name: "1/320",
     ev: 2 + 1 / 3,
-    values: ['1/320', '0.0031s']
+    values: ['1/320', '0.0031s', '3100', '65856']
 }, {
     name: "1/350",
     ev: 2.5,
@@ -870,15 +1162,15 @@ lists.shutterAll = [{
 }, {
     name: "1/400",
     ev: 2 + 2 / 3,
-    values: ['1/400', '0.0025s']
+    values: ['1/400', '0.0025s', '2460', '65936']
 }, {
     name: "1/500",
     ev: 3,
-    values: ['1/500', '0.0020s']
+    values: ['1/500', '0.0020s', '1953', '66036']
 }, {
     name: "1/640",
     ev: 3 + 1 / 3,
-    values: ['1/640', '0.0015s']
+    values: ['1/640', '0.0015s', '1550', '66176']
 }, {
     name: "1/750",
     ev: 3.5,
@@ -886,15 +1178,15 @@ lists.shutterAll = [{
 }, {
     name: "1/800",
     ev: 3 + 2 / 3,
-    values: ['1/800', '0.0012s']
+    values: ['1/800', '0.0012s', '1230', '66336']
 }, {
     name: "1/1000",
     ev: 4,
-    values: ['1/1000', '0.0010s']
+    values: ['1/1000', '0.0010s', '976', '66536']
 }, {
     name: "1/1250",
     ev: 4 + 1 / 3,
-    values: ['1/1250', '0.0007s']
+    values: ['1/1250', '1/1300', '0.0007s', '775', '66786']
 }, {
     name: "1/1500",
     ev: 4.5,
@@ -902,15 +1194,15 @@ lists.shutterAll = [{
 }, {
     name: "1/1600",
     ev: 4 + 2 / 3,
-    values: ['1/1600', '0.0006s']
+    values: ['1/1600', '0.0006s', '615', '67136']
 }, {
     name: "1/2000",
     ev: 5,
-    values: ['1/2000', '0.0005s']
+    values: ['1/2000', '0.0005s', '488', '67536']
 }, {
     name: "1/2500",
     ev: 5 + 1 / 3,
-    values: ['1/2500', '0.0004s']
+    values: ['1/2500', '0.0004s', '387', '68036']
 }, {
     name: "1/3000",
     ev: 5.5,
@@ -918,15 +1210,15 @@ lists.shutterAll = [{
 }, {
     name: "1/3200",
     ev: 5 + 2 / 3,
-    values: ['1/3200', '0.0003s']
+    values: ['1/3200', '0.0003s', '307', '68736']
 }, {
     name: "1/4000",
     ev: 6,
-    values: ['1/4000', '0.0002s']
+    values: ['1/4000', '0.0002s', '244', '69536']
 }, {
     name: "1/5000",
     ev: 6 + 1 / 3,
-    values: ['1/5000']
+    values: ['1/5000', '193', '70536']
 }, {
     name: "1/6000",
     ev: 6.5,
@@ -934,11 +1226,35 @@ lists.shutterAll = [{
 }, {
     name: "1/6400",
     ev: 6 + 2 / 3,
-    values: ['1/6400', '0.0001s']
+    values: ['1/6400', '0.0001s', '153', '71936']
 }, {
     name: "1/8000",
     ev: 7,
-    values: ['1/8000']
+    values: ['1/8000', '122', '73536']
+}, {
+    name: "1/10000",
+    ev: 7 + 1 / 3,
+    values: ['1/10000', '96', '75536']
+}, {
+    name: "1/13000",
+    ev: 7 + 2 / 3,
+    values: ['1/13000', '76', '78336']
+}, {
+    name: "1/16000",
+    ev: 8,
+    values: ['1/16000', '61', '81536']
+}, {
+    name: "1/20000",
+    ev: 8 + 1 / 3,
+    values: ['1/20000', '48']
+}, {
+    name: "1/25000",
+    ev: 8 + 2 / 3,
+    values: ['1/25000', '38']
+}, {
+    name: "1/32000",
+    ev: 9,
+    values: ['1/32000', '30']
 }];
 
 lists.shutterThirds = filterList(lists.shutterAll, 1/3);

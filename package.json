@@ -6,16 +6,22 @@
     "node": ">=0.10.0"
   },
   "dependencies": {
+    "apds-gesture": "git://github.com/elijahparker/apds-gesture",
     "async": "latest",
     "bcrypt": "latest",
     "bodyparser": "latest",
     "epeg": "^0.7.0",
     "express": "~4.0",
+    "fast-boot": "^1.0.7",
+    "geo-tz": "^3.2.0",
     "gphoto2": "elijahparker/node-gphoto2",
     "gpio-button": "^0.2.0",
+    "gps": "^0.2.0",
     "jpeg-lum": "latest",
     "jpeg-size": "0.0.1",
     "linux-gpio": "timelapseplus/node-linux-gpio",
+    "meeusjs": "git://github.com/timelapseplus/MeeusJs",
+    "moment": "^2.17.1",
     "mysql": "latest",
     "noble": "^1.3.0",
     "node-bulb": "elijahparker/node-bulb",
@@ -28,13 +34,17 @@
     "sensor_tsl2561": "latest",
     "serialport": "latest",
     "sharp": "latest",
+    "sony-camera": "0.0.6",
     "spawn-sync": "latest",
+    "speaker": "^0.3.0",
     "sqlite3": "^3.1.6",
+    "suncalc": "^1.8.0",
     "udev": "^0.1.5",
     "uid": "0.0.2",
     "underscore": "latest",
+    "wget-improved": "^1.5.0",
     "wireless": "elijahparker/node-wireless",
-    "ws": "^0.7.2"
+    "ws": "^0.8.1"
   },
   "devDependencies": {
     "mocha": "latest"

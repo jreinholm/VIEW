@@ -6,7 +6,6 @@ var WebSocket = require('ws');
 var WebSocketServer = WebSocket.Server;
 var exec = require('child_process').exec;
 var fs = require('fs');
-
 var viewAccountName = "elijahparker";
 var CLIENT_SERVER_PORT = 80;
 var CLIENT_WS_PORT = 8101;
@@ -18,8 +17,19 @@ var wss = new WebSocketServer({
 var EventEmitter = require("events").EventEmitter;
 
 var app = new EventEmitter();
+var internalEvent = new EventEmitter();
+app.remoteEnabled = false;
+
+fs.writeFile("/proc/sys/net/ipv4/tcp_low_latency", "0"); // favor low latency over high throughput (reversed now to support high-throughput for LV)
 
 express.use(Express.static('/home/view/current/frontend/www'));
+
+express.use(function(req, res, next) {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS,POST,PUT");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, access-control-allow-origin, x-view-session");
+  next();
+});
 
 express.get('/socket/address', function(req, res) {
     var host = req.headers.host;
@@ -29,6 +39,49 @@ express.get('/socket/address', function(req, res) {
         server: 'local'
     });
 });
+
+var jpegFrame = null;
+
+var connectedStreams = [];
+
+//express.get('/camera/stream.mjpeg', function(req, res) {
+/*var streamServer = http.createServer(function(req, res) {
+    console.log("APP: stream request started");
+    res.writeHead(200, {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, pre-check=0, post-check=0, max-age=0',
+        Pragma: 'no-cache',
+        Connection: 'close',
+        'Content-Type': 'multipart/x-mixed-replace; boundary=--myboundary'
+    });
+
+    var writeFrame = function() {
+        var buffer = jpegFrame;
+        res.write("--myboundary\nContent-Type: image/jpg\nContent-length: " + jpegFrame.length + "}\n\n");
+        res.write(buffer);
+    };
+
+    if(Buffer.isBuffer(jpegFrame)) writeFrame();
+
+    res.index = connectedStreams.length;
+    connectedStreams.push(res);
+
+    res.addListener('close', function() {
+        console.log("APP: stream request ended");
+        connectedStreams.splice(res.index, 1);
+    });
+});
+streamServer.listen(9000);*/
+
+app.addJpegFrame = function(frameBuffer) {
+    jpegFrame = frameBuffer;
+    console.log("APP: writing frame to " + connectedStreams.length + " streams...");
+    for(var i = 0; i < connectedStreams.length; i++) {
+        connectedStreams[i].write("--myboundary\nContent-Type: image/jpg\nContent-length: " + frameBuffer.length + "}\n\n");
+        connectedStreams[i].write(frameBuffer);
+    }
+}
+
+//express.get('//')
 
 var viewId = null;
 
@@ -56,10 +109,10 @@ var wsRemote;
 var remotePingHandle = null;
 
 
-function connectRemote() {
-    if (app.remote) return;
+function connectRemote(version) {
+    if (app.remote || !app.remoteEnabled) return;
     console.log("connecting to view.tl");
-    wsRemote = new WebSocket('ws://incoming.view.tl/socket/device', {
+    wsRemote = new WebSocket('wss://app.view.tl/socket/device', {
         headers: {
             'x-view-id': viewId
         }
@@ -75,12 +128,13 @@ function connectRemote() {
                 if(msg.connected) {
                     app.remote = true;
                     app.authCode = null;
-                    app.emit('auth-complete', app.authCode);
+                    app.emit('auth-complete', msg.email);
                     app.emit('connected', true);
                     console.log("Connected to view.tl");
                     remotePingHandle = setInterval(function() {
                         send_message('ping', null, wsRemote);
                     }, 10000);
+                    if(version) send_message('version', {version: version}, wsRemote);
                     sendLogs();
                 } else if(msg.code) {
                     app.authCode = msg.code;
@@ -108,12 +162,14 @@ function connectRemote() {
     wsRemote.once('error', function() {
         if (remotePingHandle) clearInterval(remotePingHandle);
         remotePingHandle = null;
-        //console.log("Error connecting to view.tl");
+        console.log("Disconnected from view.tl");
+        app.emit('connected', false);
         app.remote = false;
-        setTimeout(connectRemote, 15000);
+        setTimeout(connectRemote, 5000);
     });
 }
 
+app.serial = "unknown";
 // get cpu serial number as unique id for view device
 exec('cat /proc/cpuinfo', function(error, stdout, stderr) {
     lines = stdout.split('\n');
@@ -123,11 +179,27 @@ exec('cat /proc/cpuinfo', function(error, stdout, stderr) {
             if(matches.length > 1) {
                 viewId = matches[1];
                 console.log("VIEW_ID:", viewId);
+                app.serial = viewId;
                 connectRemote();
             }
         }
     }
 });
+
+function closeApp() {
+    app.remoteEnabled = false;
+    closeHttpServer();
+    if(wsRemote && wsRemote.destroy) {
+        wsRemote.close();
+    }
+    wss.clients.forEach(function (client) {
+        try {
+            if (client && client.close) client.close();
+        } catch (err) {
+            console.log("error closing websocket:", err);
+        }
+    });
+}
 
 function sendLog(logfile, logname, callback) {
     if(app.remote) {
@@ -166,10 +238,15 @@ function sendLogs(callback, uploaded) {
     if(!uploaded) uploaded = 0;
     if(app.remote) {
         console.log("Checking for logs to upload...", uploaded);
-        var logs = fs.readdirSync("/home/view/logsForUpload");
-        logs = logs.filter(function(log) {
-            return log.match(/^(log|TL)/) ? true : false;
-        });
+        var logs = null;
+        try {
+            logs = fs.readdirSync("/home/view/logsForUpload");
+            logs = logs.filter(function(log) {
+                return log.match(/^(log|TL|view-)/) ? true : false;
+            });
+        } catch(e) {
+            logs = null;
+        }
 
         if(logs && logs.length > 0) {
             var nextLogName = logs.pop();
@@ -228,12 +305,12 @@ function send_message(type, object, socket, callback) {
 function receive_message(msg_string, socket) {
     try {
     	var buildReply = function(nMsg, nSocket) {
-    		return function(type, object) {
+    		return function(type, object, callback) {
     			if(!object) object = {};
     			object.ack = nMsg.ack;
     			object._cbId = nMsg._cbId;
 
-                send_message(type, object, nSocket);
+                send_message(type, object, nSocket, callback);
     		}
     	}
 
@@ -254,11 +331,54 @@ function receive_message(msg_string, socket) {
     }
 }
 
+app.enableRemote = function(version) {
+    app.remoteEnabled = true;    
+    connectRemote(version);
+}
+
+app.disableRemote = function() {
+    app.remoteEnabled = false;
+    if(wsRemote && wsRemote.close) {
+        wsRemote.close();
+    }
+    app.remote = false;
+    app.emit('connected', false);
+}
+
 app.send = send_message;
 app.sendLogs = sendLogs;
+app.close = closeApp;
 
-server.listen(CLIENT_SERVER_PORT, function() {
+var httpServer = server.listen(CLIENT_SERVER_PORT, function() {
     console.log('listening on *:' + CLIENT_SERVER_PORT);
 });
+
+var sockets = {}, nextSocketId = 0;
+httpServer.on('connection', function (socket) {
+  // Add a newly connected socket
+  var socketId = nextSocketId++;
+  sockets[socketId] = socket;
+  console.log('socket', socketId, 'opened');
+
+  // Remove the socket when it closes
+  socket.on('close', function () {
+    console.log('socket', socketId, 'closed');
+    delete sockets[socketId];
+  });
+
+  // Extend socket lifetime for demo purposes
+  socket.setTimeout(4000);
+});
+
+function closeHttpServer() {
+    // Close the server
+    httpServer.close(function () { console.log('Server closed!'); });
+    // Destroy all open sockets
+    for (var socketId in sockets) {
+        console.log('socket', socketId, 'destroyed');
+        sockets[socketId].destroy();
+    }
+}
+    
 
 module.exports = app;

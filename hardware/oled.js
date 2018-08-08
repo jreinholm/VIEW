@@ -2,6 +2,7 @@ var exec = require('child_process').exec;
 var pitft = require("pitft");
 var fb = pitft("/dev/fb0", true);
 var fs = require('fs');
+var moment = require('moment');
 
 var oled = {};
 
@@ -27,12 +28,14 @@ var ICON_CAMERA = '';
 var ICON_WIFI = '';
 var ICON_WEB = '';
 var ICON_BT = '';
+var ICON_GPS = '';
 
 var icon = {};
 
 var DEFAULT_THEME = {
     primary: [1, 1, 1],
-    secondary: [0.1, 0.1, 0.5],
+    //secondary: [0.1, 0.1, 0.5],
+    secondary: [0.1, 0.1, 0.9],
     alert: [1, 0, 0],
     batteryFull: [0.2, 1, 0.2],
     batteryOk: [0.1, 0.5, 0.1],
@@ -52,6 +55,17 @@ var RED_THEME = {
     background: [0.1, 0.0, 0.0]
 }
 
+var HC_THEME = {
+    primary: [1, 1, 1],
+    secondary: [1, 1, 0.5],
+    alert: [1, 0, 0],
+    batteryFull: [0.2, 1, 0.2],
+    batteryOk: [0.1, 0.5, 0.1],
+    batteryLow: [1, 0.2, 0.2],
+    help: [0, 1, 0],
+    background: [0.1, 0.1, 0.1]
+}
+
 
 oled.colors = DEFAULT_THEME;
 oled.theme = 'VIEW Default';
@@ -60,6 +74,9 @@ oled.setTheme = function(themeName) {
     if(themeName == 'red') {
         oled.theme = 'Night Red';
         oled.colors = RED_THEME;
+    } else if(themeName == 'hc') {
+        oled.theme = 'High Contrast';
+        oled.colors = HC_THEME;
     } else {
         oled.theme = 'VIEW Default';
         oled.colors = DEFAULT_THEME;
@@ -77,6 +94,7 @@ var MENU_XOFFSET = 5;
 var MENU_YOFFSET = 35;
 var MENU_LINE_HEIGHT = 25;
 var MENU_FONT_SIZE = 14;
+var MENU_SELECT_FONT_SIZE = 18
 var MENU_TEXT_FONT_SIZE = 12;
 var MENU_STATUS_FONT_SIZE = 8;
 var MENU_STATUS_XOFFSET = 5;
@@ -87,6 +105,7 @@ var IMAGE_HEIGHT = 40;
 oled.IMAGE_WIDTH = IMAGE_WIDTH;
 oled.IMAGE_HEIGHT = IMAGE_HEIGHT;
 
+var TEXT_MAX_CHARS = 32;
 var TEXT_LIST = {};
 TEXT_LIST.alpha = " ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 TEXT_LIST.num = " 0123456789";
@@ -135,7 +154,7 @@ function color(name) {
 function textInitPos(setMode) {
     var mode = textGetMode();
 
-    if(setMode && oled.selected < textValue.length) {
+    if(textMode != 'number' && setMode && oled.selected < textValue.length) {
         for(var i = 0; i < TEXT_MODES.length; i++) {
             mode = textGetMode(TEXT_MODES[i]);
             var list = TEXT_LIST[mode];
@@ -146,10 +165,11 @@ function textInitPos(setMode) {
                 break;
             }
         }
-    }
 
-    if(oled.selected < textValue.length && TEXT_LIST[mode].indexOf(textValue.toUpperCase().charAt(oled.selected)) !== -1 && textValue.charAt(oled.selected) != ' ') {
-        TEXT_INDEX[mode] = TEXT_LIST[mode].indexOf(textValue.toUpperCase().charAt(oled.selected));
+    }
+    var list = getTextList();
+    if(oled.selected < textValue.length && list.indexOf(textValue.toUpperCase().charAt(oled.selected)) !== -1 && textValue.charAt(oled.selected) != ' ') {
+        TEXT_INDEX[mode] = list.indexOf(textValue.toUpperCase().charAt(oled.selected));
     }
 }
 
@@ -162,16 +182,30 @@ function textUpdateCurrent() {
 }
 
 oled.textMoveForward = function() {
-    if(oled.selected < 24) oled.selected++;    
-    textInitPos(true);
+    if(oled.mode == 'text' || oled.mode == 'number') {
+        if(oled.selected < TEXT_MAX_CHARS) oled.selected++;    
+        if(textMode == 'number') {
+            var textLength = textValue.length;
+            textValue = textValue.replace(/ /g, '');
+            oled.selected -= textLength - textValue.length;
+        }
+        textInitPos(true);
+    } else if(oled.mode == 'time' || oled.mode == "date") {
+        if(oled.selected < 2) oled.selected++; else oled.selected = 0;  
+    }
     oled.writeMenu();
     oled.update();
 }
 
 oled.textMoveBackward = function() {
     if(oled.selected > 0) oled.selected--;
-    textValue = textValue.trim();
-    textInitPos(true);
+    if(oled.mode == 'text' || oled.mode == 'number') {
+        textValue = textValue.trim();
+        if(textMode == 'number') {
+            textValue = textValue.replace(/ /g, '');
+        }
+        textInitPos(true);
+    }
     oled.writeMenu();
     oled.update();
 }
@@ -179,29 +213,48 @@ oled.textMoveBackward = function() {
 function textGetMode(currentMode) {
     if(!currentMode) currentMode = textMode;
     var mode;
-    if(currentMode == 'ucase' || currentMode == 'lcase') mode = 'alpha'; else mode = currentMode;    
+    if(currentMode == 'ucase' || currentMode == 'lcase') mode = 'alpha'; else mode = currentMode == 'number' ? 'num' : currentMode;    
     return mode;
 }
 
 function textGetCurrent() {
     var mode = textGetMode();
-    var char = TEXT_LIST[mode].charAt(TEXT_INDEX[mode]);
+    var list = getTextList();
+    var char = list.charAt(TEXT_INDEX[mode]);
     if(textMode == 'lcase') char = char.toLowerCase();
-    if(!char) char = " ";
+    if(!char) {
+        char = textMode == 'number' ? "0" : " ";
+    }
     return char;
+}
+
+function getTextList() {
+    if(textMode == 'number') {
+        if(oled.selected == 0) {
+            return TEXT_LIST['num'].concat(['-']);
+        } else if(textValue.indexOf('.') === -1 || textValue.indexOf('.') === oled.selected) {
+            return TEXT_LIST['num'].concat(['.']);
+        } else {
+            return TEXT_LIST['num'];
+        }        
+    } else {
+        return TEXT_LIST[textGetMode()];
+    }
 }
 
 function textScrollUp() {
     var mode = textGetMode();
     TEXT_INDEX[mode]++;
-    if(TEXT_INDEX[mode] >= TEXT_LIST[mode].length) TEXT_INDEX[mode] = 0;
+    var list = getTextList();
+    if(TEXT_INDEX[mode] >= list.length) TEXT_INDEX[mode] = 0;
     textUpdateCurrent();
 }
 
 function textScrollDown() {
     var mode = textGetMode();
     TEXT_INDEX[mode]--;
-    if(TEXT_INDEX[mode] < 0) TEXT_INDEX[mode] = TEXT_LIST[mode].length - 1;
+    var list = getTextList();
+    if(TEXT_INDEX[mode] < 0) TEXT_INDEX[mode] = list.length - 1;
     textUpdateCurrent();
 }
 
@@ -227,8 +280,10 @@ function drawTimeLapseStatus(status) {
     var hours = Math.floor(m / 60);
     var minutes = m % 60;
 
+    if(status.remaining === null) status.remaining = "Inf";
+
     fb.text(0, 100, "Interval: " + (Math.round(status.intervalSeconds * 10) / 10).toString() + "s (" + status.intervalModeText + ")");
-    fb.text(0, 113, "Frames:   " + status.frames.toString() + "/" + status.remaining.toString());
+    fb.text(0, 113, "Frames:   " + (status.frames || 0).toString() + "/" + status.remaining.toString());
     fb.text(0, 126, "Duration: " + hours.toString() + "h" + minutes.toString() + "m");
 
     // ramp chart window
@@ -236,8 +291,22 @@ function drawTimeLapseStatus(status) {
     //fb.rect(110, 88, 50, 40, true);
 
     // histogram window
-    //color("background");
-    //fb.rect(105, 67, 55, 26, false); 
+    color("background");
+    var histX = 110;
+    var histY = 90;
+    var histH = 37;
+    var histW = 50;
+    if(statusDetails.histogram) {
+        fb.rect(histX, histY, histW, histH, false);
+        color("primary");
+        for(var i = 0; i < 256; i++) {
+            var x = histX + 1 + (histW - 2) * (i/255);
+            var h = statusDetails.histogram[i] ? (histH - 2) * (statusDetails.histogram[i]/256) : 0;
+            fb.line(x, histY + 1 + histH - h, x, histY + 1 + histH, 1);
+        }
+    } else {
+        fb.rect(histX, histY, histW, histH, false); 
+    }
 
     // interval/exposure status line
     var lw = 156; // line width
@@ -280,7 +349,7 @@ oled.updateTimelapseStatus = function(status) {
     if(status) {
         oled.timelapseStatus = status;
         if(status.running) {
-            if(oled.timelapseMode) statusIntervalHandle = setInterval(function(){drawTimeLapseStatus(status);}, 100); 
+            if(oled.mode == 'timelapse') statusIntervalHandle = setInterval(function(){drawTimeLapseStatus(status);}, 100); 
         } else {
             statusDetails = {};
         }
@@ -291,12 +360,18 @@ oled.updateThumbnailPreview = function(path) {
         statusDetails.img110 = path;
     }, 100);
 }
+oled.updateHistogram = function(histogram) {
+    setTimeout(function(){
+        statusDetails.histogram = histogram;
+    }, 100);
+}
 
 oled.setTimelapseMode = function(set) {
-    oled.timelapseMode = set;
     if(set) {
+        oled.mode = 'timelapse';
         oled.writeMenu();
     } else {
+        oled.mode = 'menu';
         oled.updateTimelapseStatus();
     }
 }
@@ -328,6 +403,10 @@ function drawStatusBar() {
     }
     if(icon.camera) {
         fb.text(statusIconX, MENU_STATUS_YOFFSET - 0.5, ICON_CAMERA);
+        statusIconX -= 10;
+    }
+    if(icon.gps) {
+        fb.text(statusIconX, MENU_STATUS_YOFFSET - 0.5, ICON_GPS);
         statusIconX -= 10;
     }
 
@@ -372,11 +451,11 @@ oled.writeMenu = function() {
     var selected;
     if (oled.selected < 0) oled.selected = 0;
 
-    if (!oled.timelapseMode) fb.clear();
+    if (oled.mode != 'timelapse') fb.clear();
 
-    if (oled.timelapseMode) {
+    if (oled.mode == 'timelapse') {
         if(oled.timelapseStatus) oled.updateTimelapseStatus(oled.timelapseStatus);
-    } else if (oled.setting) { // setting mode
+    } else if (oled.mode == 'list') { // setting mode
         if (oled.selected >= oled.setting.length) oled.selected = oled.setting.length - 1;
         var name = oled.setting[oled.selected].name || '';
         var value = oled.setting[oled.selected].value || '';
@@ -385,11 +464,11 @@ oled.writeMenu = function() {
         color("secondary");
         fb.text(MENU_XOFFSET * 2, 128 / 2 - MENU_FONT_SIZE - 5, name);
 
-        fb.font(MENU_FONT_SIZE * 1.5, false, FONT_DEFAULT);
+        fb.font(MENU_SELECT_FONT_SIZE, false, FONT_DEFAULT);
         color("primary");
         fb.text(MENU_XOFFSET, 128 / 2 + 5, value);
 
-    } else if (oled.textLines) { // text display mode
+    } else if (oled.mode == 'read') { // text display mode
         fb.font(MENU_STATUS_FONT_SIZE, false, FONT_DEFAULT);
         color("secondary");
         fb.text(MENU_STATUS_XOFFSET, MENU_STATUS_YOFFSET, oled.textTitle);
@@ -403,14 +482,14 @@ oled.writeMenu = function() {
             if(i + oled.selected >= oled.textLines.length) break;
             fb.text(0, 26 + i * 16, oled.textLines[i + oled.selected]);
         }
-    } else if (oled.textInput) { // text input mode
-        var name = oled.textInput || '';
+    } else if (oled.mode == 'text' || oled.mode == 'number') { // text/number input mode
+        var name = oled.name || '';
 
         fb.font(10, false, FONT_DEFAULT);
         color("secondary");
         fb.text(MENU_XOFFSET * 2, 128 / 2 - MENU_FONT_SIZE - 12, name);
 
-        fb.font(MENU_FONT_SIZE * 1.5, false, FONT_MONO); // monospace font
+        fb.font(MENU_SELECT_FONT_SIZE, false, FONT_MONO); // monospace font
         color("primary");
         var xAdvance = 15;
         var xStart;
@@ -451,31 +530,34 @@ oled.writeMenu = function() {
             fb.line(160, y, 160 - w, y + h / 2, 2);
         }
 
-        color("primary");
-        fb.font(MENU_FONT_SIZE, false, FONT_MONO); // monospace font
-        var modes = ['A', 'a', '1', '$'];
-        var cMode = 0;
-        if(textMode == 'ucase') cMode = 0;
-        if(textMode == 'lcase') cMode = 1;
-        if(textMode == 'num') cMode = 2;
-        if(textMode == 'sym') cMode = 3;
-        var xAdvance = 10;
-        for(var i = 0; i < modes.length; i++) {
-            if(cMode == i) {
-                color("primary");
-            } else {
-                color("secondary");
-            }           
-            fb.text(160 - 48 + i * xAdvance, 125, modes[i]);
-        }
-        color("primary");
-        var w = 5;
-        var h = 8;
-        var x = 160 - w;
-        var y = 128 - h - 1;
+        if(textMode != 'number') {
+            color("primary");
+            fb.font(MENU_FONT_SIZE, false, FONT_MONO); // monospace font
+            var modes = ['A', 'a', '1', '$'];
+            var cMode = 0;
+            if(textMode == 'ucase') cMode = 0;
+            if(textMode == 'lcase') cMode = 1;
+            if(textMode == 'num') cMode = 2;
+            if(textMode == 'sym') cMode = 3;
+            var xAdvance = 10;
+            for(var i = 0; i < modes.length; i++) {
+                if(cMode == i) {
+                    color("primary");
+                } else {
+                    color("secondary");
+                }           
+                fb.text(160 - 48 + i * xAdvance, 125, modes[i]);
+            }
 
-        fb.line(x, y, x + w, y + h / 2, 1, 1, 1, 1);
-        fb.line(x + w, y + h / 2, x, y + h, 1, 1, 1, 1);
+            color("primary");
+            var w = 5;
+            var h = 8;
+            var x = 160 - w;
+            var y = 128 - h - 1;
+
+            fb.line(x, y, x + w, y + h / 2, 1, 1, 1, 1);
+            fb.line(x + w, y + h / 2, x, y + h, 1, 1, 1, 1);
+        }
 
         color("help");
         fb.font(10, false, FONT_DEFAULT);
@@ -484,7 +566,102 @@ oled.writeMenu = function() {
         fb.text(0, 128 - 0, "hold to scroll cursor");
 
 
-    } else if(oled.imageMenu) { // menu image list mode
+    } else if (oled.mode == 'time') { // date/time input mode
+        var name = oled.name || '';
+
+        fb.font(10, false, FONT_DEFAULT);
+        color("secondary");
+        fb.text(MENU_XOFFSET * 2, 128 / 2 - MENU_FONT_SIZE - 12, name);
+
+        fb.font(MENU_SELECT_FONT_SIZE, false, FONT_MONO); // monospace font
+        color("primary");
+        var xAdvance = 15;
+        var xStart;
+
+        var h = oled.timeObject.hours.toString();
+        if(h.length < 2) h = '0' + h;
+        if(h.length < 2) h = '0' + h;
+        var m = oled.timeObject.minutes.toString();
+        if(m.length < 2) m = '0' + m;
+        if(m.length < 2) m = '0' + m;
+        var s = oled.timeObject.seconds.toString();
+        if(s.length < 2) s = '0' + s;
+        if(s.length < 2) s = '0' + s;
+
+        var timeString = h + ':' + m + ':' + s;
+
+        for(var i = 0; i < 3; i++) {
+            xStart = MENU_XOFFSET + (i * xAdvance * 2);
+            if(oled.selected == i) {
+                color("secondary");
+                var x = xStart - 2 + xAdvance / 2;
+                var y = 128 / 2 - 10;
+                var w = xAdvance - 1;
+                var h = 25;
+                fb.line(x, y, x + w / 2, y - 5, 2, 0.1, 0.1, 0.5);
+                fb.line(x + w / 2, y - 5, x + w, y, 2, 0.1, 0.1, 0.5);
+
+                fb.line(x, y + h, x + w / 2, y + h + 5, 2, 0.1, 0.1, 0.5);
+                fb.line(x + w / 2, y + h + 5, x + w, y + h, 2, 0.1, 0.1, 0.5);
+
+            }
+            color("primary");
+        }
+        fb.text(MENU_XOFFSET, 128 / 2 + 9, timeString);
+
+        color("help");
+        fb.font(10, false, FONT_DEFAULT);
+        fb.text(0, 128 - 20, "press knob to advance");
+        fb.text(0, 128 - 10, "cursor, press and");
+        fb.text(0, 128 - 0, "hold to scroll cursor");
+
+
+    } else if (oled.mode == 'date') { // date/time input mode
+        var name = oled.name || '';
+
+        fb.font(10, false, FONT_DEFAULT);
+        color("secondary");
+        fb.text(MENU_XOFFSET * 2, 128 / 2 - MENU_FONT_SIZE - 12, name);
+
+        fb.font(MENU_SELECT_FONT_SIZE, false, FONT_MONO); // monospace font
+        color("primary");
+        var xAdvance = 15;
+        var xStart;
+
+        var d = oled.timeObject.moment.format("D");
+        if(d.length < 2) d = ' ' + d;
+        var m = oled.timeObject.moment.format("MMM");
+        var y = oled.timeObject.moment.format("YYYY");
+
+        var dateString = d + ' ' + m + ' ' + y;
+
+        for(var i = 0; i < 3; i++) {
+            xStart = MENU_XOFFSET + (i * xAdvance * 3);
+            if(oled.selected == i) {
+                color("secondary");
+                var x = xStart - 2 + xAdvance / 2;
+                var y = 128 / 2 - 10;
+                var w = xAdvance - 1;
+                var h = 25;
+                fb.line(x, y, x + w / 2, y - 5, 2, 0.1, 0.1, 0.5);
+                fb.line(x + w / 2, y - 5, x + w, y, 2, 0.1, 0.1, 0.5);
+
+                fb.line(x, y + h, x + w / 2, y + h + 5, 2, 0.1, 0.1, 0.5);
+                fb.line(x + w / 2, y + h + 5, x + w, y + h, 2, 0.1, 0.1, 0.5);
+
+            }
+            color("primary");
+        }
+        fb.text(MENU_XOFFSET, 128 / 2 + 9, dateString);
+
+        color("help");
+        fb.font(10, false, FONT_DEFAULT);
+        fb.text(0, 128 - 20, "press knob to advance");
+        fb.text(0, 128 - 10, "cursor, press and");
+        fb.text(0, 128 - 0, "hold to scroll cursor");
+
+
+    } else if(oled.mode == 'imageMenu') { // menu image list mode
         //console.log("MENU-IMAGE mode");
         itemArray = oled.imageMenu;
 
@@ -567,6 +744,7 @@ oled.writeMenu = function() {
         fb.font(MENU_FONT_SIZE, false, FONT_DEFAULT);
         color("primary");
         for(var i = 0; i < list.length; i++) {
+            if(list[i] == null || typeof list[i] != "string") list[i] = "---";
             var parts = list[i].split('~');
 
             var textSize = fb.text(MENU_XOFFSET, MENU_YOFFSET + i * MENU_LINE_HEIGHT, parts[0]);
@@ -604,19 +782,14 @@ oled.showBusy = function() {
 
 var screenTimeout = null;
 oled.create = function(itemArray, selected) {
-    oled.textInput = null;
-    oled.textLines = null;
-    oled.setting = null;
-    oled.imageMenu = null;
+    oled.mode = 'menu';
     oled.items = itemArray;
     oled.selected = selected || 0;
     oled.writeMenu();
 }
 
 oled.createMenuImage = function(itemArray, selected) {
-    oled.textInput = null;
-    oled.textLines = null;
-    oled.setting = null;
+    oled.mode = 'imageMenu';
     oled.imageMenu = itemArray;
     oled.items = itemArray;
     oled.selected = selected || 0;
@@ -624,20 +797,15 @@ oled.createMenuImage = function(itemArray, selected) {
 }
 
 oled.value = function(pairs, selected) {
-    oled.textInput = null;
-    oled.imageMenu = null;
-    oled.textLines = null;
+    oled.mode = 'list';
     oled.setting = pairs;
     oled.selected = selected || 0;
     oled.writeMenu();
 }
 
 oled.text = function(name, value) {
-    //console.log("setting up text input: ", name, value);
-    oled.setting = null;
-    oled.textLines = null;
-    oled.imageMenu = null;
-    oled.textInput = name;
+    oled.mode = 'text';
+    oled.name = name;
     oled.selected = 0;
     textValue = value || "";
     textMode = 'ucase';
@@ -645,26 +813,64 @@ oled.text = function(name, value) {
     oled.writeMenu();
 }
 
-oled.displayText = function(title, text) {
-    oled.textInput = null;
-    oled.textLines = null;
-    oled.imageMenu = null;
-    oled.setting = null;
-    oled.textTitle = title;
+oled.number = function(name, value) {
+    oled.mode = 'number';
+    oled.name = name;
+    oled.selected = 0;
+    if(typeof value == "number") value = value.toString();
+    textValue = value || "0";
+    textMode = 'number';
+    textInitPos(true);
+    oled.writeMenu();
+}
+
+oled.time = function(name, value) {
+    oled.mode = 'time';
+    oled.name = name;
+    oled.selected = 0;
+    value = moment(value).utc();
+    oled.timeObject = {
+        hours: value.hours(),
+        minutes: value.minutes(),
+        seconds: value.seconds(),
+        moment: value
+    }
+    oled.writeMenu();
+}
+
+oled.date = function(name, value) {
+    oled.mode = 'date';
+    oled.name = name;
+    oled.selected = 0;
+    value = moment(value).utc();
+    oled.timeObject = {
+        hours: value.hours(),
+        minutes: value.minutes(),
+        seconds: value.seconds(),
+        moment: value
+    }
+    oled.writeMenu();
+}
+
+function parseTextIntoLines(text) {
+    var lines = [];
     var maxWidth = 158;
     if(typeof text !== "string") {
         text = "an unknown error occurred";
     }
-    var words = text.replace(/[\n\r]+/g, ' \n ').replace(/[ ]+/g, ' ').split(' ');
-    oled.textLines = [];
+    var words = text.replace(/[\n\r]+/g, ' \n ').replace(/[\t]+/g, ' \t ').replace(/[ ]+/g, ' ').split(' ');
     fb.font(MENU_TEXT_FONT_SIZE, false, FONT_DEFAULT);
     var i = 0;
     var line = "";
     for(i = 0; i < words.length; i++) {
         if(words[i] == "\n") {
-            if(line.length > 0) oled.textLines.push(line);
+            if(line.length > 0) lines.push(line);
             line = "";
-            oled.textLines.push(' ');
+            lines.push(' ');
+            continue;
+        } else if(words[i] == "\t") {
+            if(line.length > 0) lines.push(line);
+            line = "";
             continue;
         }
         var newLine = (line + ' ' + words[i]).trim();
@@ -672,17 +878,45 @@ oled.displayText = function(title, text) {
         if(size.width <= maxWidth) {
             line = newLine;
         } else {
-            oled.textLines.push(line);
+            lines.push(line);
             line = (words[i]).trim();
         }
     }
-    if(line.length > 0) oled.textLines.push(line);
+    if(line.length > 0) lines.push(line);
+    return lines;
+}
+
+oled.displayText = function(title, text) {
+    oled.mode = 'read';
+    oled.textTitle = title;
+    oled.textLines = parseTextIntoLines(text);
     oled.selected = 0;
     oled.writeMenu();
 }
 
+oled.updateDisplayText = function(text) {
+    oled.textLines = parseTextIntoLines(text);
+    oled.writeMenu();
+    oled.update();
+}
+
 oled.getTextValue = function() {
     return textValue.trim();
+}
+
+oled.getNumberValue = function() {
+    return parseFloat(textValue.trim().replace(/ /g, '')) || 0;
+}
+
+oled.getTimeValue = function() {
+    oled.timeObject.moment.hours(oled.timeObject.hours);
+    oled.timeObject.moment.minutes(oled.timeObject.minutes);
+    oled.timeObject.moment.seconds(oled.timeObject.seconds);
+    return oled.timeObject.moment;
+}
+
+oled.getDateValue = function() {
+    return oled.timeObject.moment;
 }
 
 oled.select = function(index) {
@@ -700,35 +934,63 @@ oled.update = function(override) {
 }
 
 oled.up = function() {
-    if (oled.textInput) {
+    if (oled.mode == 'text' || oled.mode == 'number') {
         textScrollDown();
-        oled.writeMenu();
-        oled.update();
+    } else if (oled.mode == 'time') {
+        if(oled.selected == 0) {
+            if(oled.timeObject.hours > 0) oled.timeObject.hours--; else oled.timeObject.hours = 23;
+        } else if(oled.selected == 1) {
+            if(oled.timeObject.minutes > 0) oled.timeObject.minutes--; else oled.timeObject.minutes = 59;
+        } else if(oled.selected == 2) {
+            if(oled.timeObject.seconds > 0) oled.timeObject.seconds--; else oled.timeObject.seconds = 59;
+        }
+    } else if (oled.mode == 'date') {
+        if(oled.selected == 0) {
+            oled.timeObject.moment.subtract(1, 'days');
+        } else if(oled.selected == 1) {
+            oled.timeObject.moment.subtract(1, 'months');
+        } else if(oled.selected == 2) {
+            oled.timeObject.moment.subtract(1, 'years');
+        }
     } else if (oled.selected > 0) {
         oled.selected--;
         oled.select(oled.selected);
-        oled.writeMenu();
-        oled.update();
     }
+    oled.writeMenu();
+    oled.update();
 }
 
 oled.down = function() {
-    if (oled.textInput) {
+    if (oled.mode == 'text' || oled.mode == 'number') {
         textScrollUp();
-        oled.writeMenu();
-        oled.update();
-    } else if (oled.textLines) {
+    } else if (oled.mode == 'read') {
         if(oled.selected < oled.textLines.length - 3) {
             oled.selected++;
             oled.writeMenu();
             oled.update();
         }
-    } else if (oled.setting || oled.selected < oled.items.length - 1) {
+    } else if (oled.mode == 'time') {
+        if(oled.selected == 0) {
+            if(oled.timeObject.hours < 23) oled.timeObject.hours++; else oled.timeObject.hours = 0;
+        } else if(oled.selected == 1) {
+            if(oled.timeObject.minutes < 59) oled.timeObject.minutes++; else oled.timeObject.minutes = 0;
+        } else if(oled.selected == 2) {
+            if(oled.timeObject.seconds < 59) oled.timeObject.seconds++; else oled.timeObject.seconds = 0;
+        }
+    } else if (oled.mode == 'date') {
+        if(oled.selected == 0) {
+            oled.timeObject.moment.add(1, 'days');
+        } else if(oled.selected == 1) {
+            oled.timeObject.moment.add(1, 'months');
+        } else if(oled.selected == 2) {
+            oled.timeObject.moment.add(1, 'years');
+        }
+    } else if (oled.mode == 'list' || oled.selected < oled.items.length - 1) {
         oled.selected++;
         oled.select(oled.selected);
-        oled.writeMenu();
-        oled.update();
     }
+    oled.writeMenu();
+    oled.update();
 }
 
 oled.hide = function() {
@@ -744,6 +1006,16 @@ oled.show = function() {
 }
 
 oled.close = function() {
+}
+
+oled.liveview = function(jpegFile, text) {
+    oled.jpeg(jpegFile, 0, 14, true);
+    fb.color(0, 0, 0);
+    fb.rect(0, 119, 159, 127, true);
+    fb.font(MENU_STATUS_FONT_SIZE, false, FONT_DEFAULT);
+    color("primary");
+    fb.text(3, 127, text);
+    oled.update(true);
 }
 
 oled.jpeg = function(jpegFile, x, y, overlay) {
@@ -780,8 +1052,15 @@ var videoIntervalHandle = null;
 var videoCallback = null;
 var skipFrames = 0;
 oled.video = function(videoPathFormat, frames, fps, callback) {
-    if(oled.videoRunning) return;
-    if(!frames) return;
+    console.log("playing video, mode=", typeof frames);
+    if(oled.videoRunning) return callback && setTimeout(callback);
+    var frameArray = null;
+    if(!frames || (!videoPathFormat && typeof frames != 'object')) return callback && setTimeout(callback);
+    if(typeof frames == 'object') {
+        frameArray = frames;
+        frames = frameArray.length;
+        console.log("running video from array of frames with length", frames);
+    }
     oled.block();
     videoCallback = callback;
     fb.clear();
@@ -791,24 +1070,31 @@ oled.video = function(videoPathFormat, frames, fps, callback) {
     var indexString, paddingLength;
     var frameComplete = true;
     var frameLineFactor = (160 - 6) / frames;
+
     videoIntervalHandle = setInterval(function(){
         if(!frameComplete) {
             console.log("dropping frame #" + index);
             return; // drop frame
         }
         frameComplete = false;
-        frameIndex++;
         frameIndex += skipFrames;
         skipFrames = 0;
         if(frameIndex > frames) oled.stopVideo();
-        indexString = frameIndex.toString();
-        paddingLength = 5 - indexString.length;
-        while(paddingLength > 0) {
-            paddingLength--;
-            indexString = '0' + indexString;
+
+        if(frameArray) {
+            fb.jpeg(0, 0, frameArray[frameIndex]);
+            frameIndex++;
+        } else {
+            frameIndex++;
+            indexString = frameIndex.toString();
+            paddingLength = 5 - indexString.length;
+            while(paddingLength > 0) {
+                paddingLength--;
+                indexString = '0' + indexString;
+            }
+            //fb.jpegUnbuffered(0, 0, videoPathFormat.replace('%05d', indexString));
+            fb.jpeg(0, 0, videoPathFormat.replace('%05d', indexString));
         }
-        //fb.jpegUnbuffered(0, 0, videoPathFormat.replace('%05d', indexString));
-        fb.jpeg(0, 0, videoPathFormat.replace('%05d', indexString));
         color("background");
         fb.line(3, 127 - 3, 159 - 3, 127 - 3, 2);
         color("primary");

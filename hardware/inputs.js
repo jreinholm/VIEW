@@ -1,11 +1,31 @@
+require('rootpath')();
 var INPUTS_BIN_PATH = "/home/view/current/bin/inputs";
 var GESTURE_BIN_PATH = "/home/view/current/bin/gesture";
-var EventEmitter = require("events").EventEmitter;
+var GestureLib = require('apds-gesture');
 var spawn = require('child_process').spawn;
 var exec = require('child_process').exec;
 var Button = require('gpio-button');
+var db = require("system/db.js");
+var EventEmitter = require("events").EventEmitter;
 
 var inputs = new EventEmitter();
+
+var GESTURE_INT_GPIO = 72;//PC8
+var GESTURE_I2C_BUS = 2;
+
+var gesture = GestureLib.use(GESTURE_I2C_BUS, GESTURE_INT_GPIO);
+
+gesture.on('ready', function() {
+    console.log("INPUTS: found a gesture sensor");
+});
+
+gesture.on('error', function(err) {
+    console.log("INPUTS: Gesture Error: ", err);
+});
+
+gesture.on('movement', function(dir) {
+    inputs.emit('G', dir.substr(0, 1).toUpperCase());
+});
 
 var inputsProcess = null;
 var inputsRunning = false;
@@ -84,66 +104,73 @@ function setupButton(buttonConfig) {
 
 exec("killall gesture");
 exec("killall inputs");
-
-inputs.start = function() {
-    stop = false;
-    if(inputsRunning) return;
-    inputsProcess = spawn(INPUTS_BIN_PATH);
-    inputsRunning = true;
-    console.log("inputs process started");
-    inputsProcess.stdout.on('data', function(chunk) {
-        //console.log("inputs stdin: " + chunk.toString());
-        var matches = chunk.toString().match(/([A-Z])=([A-Z0-9\-]+)/);
-        if (matches && matches.length > 1) {
-            if(matches[1] == 'D') {
-                var dir = matches[2];
-                if(buttons['4']._pressed) dir += "+";
-                inputs.emit('D', dir);
+var options = {};
+var mcuSetup = false;
+inputs.start = function(knobOptions) {
+    options = knobOptions;
+    if(knobOptions.knob) {
+        stop = false;
+        if(inputsRunning) return;
+        inputsProcess = spawn(INPUTS_BIN_PATH);
+        inputsRunning = true;
+        console.log("inputs process started");
+        inputsProcess.stdout.on('data', function(chunk) {
+            //console.log("inputs stdin: " + chunk.toString());
+            var matches = chunk.toString().match(/([A-Z])=([A-Z0-9\-]+)/);
+            if (matches && matches.length > 1) {
+                if(matches[1] == 'D') {
+                    var dir = matches[2];
+                    if(buttons['4']._pressed) dir += "+";
+                    inputs.emit('D', dir);
+                }
             }
-        }
-    });
-    inputsProcess.stderr.on('data', function(chunk) {
-        console.log("inputs stderr: " + chunk.toString());
-        chunk = null;
-    });
-    inputsProcess.on('close', function(code) {
-        console.log("inputs process exited");
-        inputsRunning = false;
-        if (!stop) {
-            setTimeout(function() {
-                if(!stop) inputs.start();
-            }, 500);
-        }
-    });
-
+        });
+        inputsProcess.stderr.on('data', function(chunk) {
+            console.log("inputs stderr: " + chunk.toString());
+            chunk = null;
+        });
+        inputsProcess.on('close', function(code) {
+            console.log("inputs process exited");
+            inputsRunning = false;
+            if (!stop) {
+                setTimeout(function() {
+                    if(!stop) inputs.start();
+                }, 500);
+            }
+        });
+    } else if(options.mcu) {
+        if(mcuSetup) return;
+        mcuSetup = true;
+        options.mcu.on('knob', function(val) {
+            k = 'U';
+            if(val < 0) {
+                k = 'D';
+            }
+            if(buttons['4']._pressed) k += "+";
+            inputs.emit('D', k);
+        });
+    }
 }
 
 inputs.startGesture = function() {
-    stopGesture = false;
     inputs.gestureStatus = "enabled";
-    if(gestureRunning) return;
-    gestureProcess = spawn(GESTURE_BIN_PATH);
-    gestureRunning = true;
-    console.log("gesture process started");
-    gestureProcess.stdout.on('data', function(chunk) {
-        console.log("gesture stdin: " + chunk.toString());
-        var matches = chunk.toString().match(/([A-Z])=([A-Z0-9\-]+)/);
-        if (matches && matches.length > 1) {
-            inputs.emit(matches[1], matches[2]);
-        }
+    db.get('gestureCalibration', function(err, gestureCalibration) {
+        if(err || !gestureCalibration) gestureCalibration = {};
+        gesture.setup(gestureCalibration, function(){
+            console.log("INPUTS: starting gesture sensor", (gestureCalibration.gUOffset ? "(calibrated)" : ""));
+            gesture.start();
+        });
     });
-    gestureProcess.stderr.on('data', function(chunk) {
-        console.log("gesture stderr: " + chunk.toString());
-        chunk = null;
-    });
-    gestureProcess.on('close', function(code) {
-        console.log("gesture process exited");
-        gestureRunning = false;
-        if (!stopGesture) {
-            setTimeout(function() {
-                if(!stopGesture) inputs.startGesture();
-            }, 100);
+}
+inputs.calibrateGesture = function(statusCallback) {
+    gesture.calibrate(function(err, status, calResults) {
+        if(calResults) {
+            db.set('gestureCalibration', calResults);
+            gesture.start();
+        } else if(err) {
+            console.log("INPUTS: error calibrating gesture: ", err);
         }
+        statusCallback && statusCallback(err, status, (calResults || err) ? true : false);
     });
 }
 
@@ -169,20 +196,9 @@ inputs.stop = function(callback) {
 }
 
 inputs.stopGesture = function() {
-    stopGesture = true;
     inputs.gestureStatus = "disabled";
-    if (gestureRunning) {
-        console.log("gesture process exiting...");
-        try {
-            gestureProcess.stdin.write('\n\n\n');
-            gestureProcess.stdin.end();
-        } catch (e) {
-            console.log("gesture close error: ", e);                
-            setTimeout(function(){
-                gestureProcess.kill();
-            }, 1000);
-        }
-    }    
+    gesture.stop();
+    gesture.disable();
 }
 
 module.exports = inputs;

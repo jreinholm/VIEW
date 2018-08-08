@@ -15,10 +15,10 @@ camera.settings = {
     bulbMinUs: null,
 }
 
-camera.fixedApertureEv = -4;
-
 var cbStore = {};
 var cbIndex = 0;
+
+console.log(">>>>>>> Starting camera module >>>>>>>>");
 
 function getCallbackId(cb) {
     if (!cb) return 0;
@@ -110,33 +110,10 @@ camera.testBulb = function() {
     doTest();
 }
 
-camera.autoSetEv = function() {
-    camera.getEv(function(err, currentEv) {
-        var expEv = camera.ptp.ev;
-        console.log("currentEv EV:", currentEv);
-        console.log("Exposure EV:", expEv);
-        var targetEv = currentEv + expEv;
-        console.log("Target EV:", targetEv);
-        camera.setEv(targetEv);
-        camera.ptp.getSettings();
-    });
-}
-
-camera.getEvFromSettings = function(cameraSettings) {
-    var settings = cameraSettings.details;
-    var av = (settings.aperture && settings.aperture.ev != null) ? settings.aperture.ev : camera.fixedApertureEv;
-
-    if(settings && settings.shutter && settings.iso) {
-        return lists.getEv(settings.shutter.ev, av, settings.iso.ev);
-    } else {
-        return null;
-    }
-}
-
 camera.getEv = function(callback) {
     camera.ptp.getSettings(function() {
         var settings = camera.ptp.settings.details;
-        var av = (settings.aperture && settings.aperture.ev != null) ? settings.aperture.ev : camera.fixedApertureEv;
+        var av = (settings.aperture && settings.aperture.ev != null) ? settings.aperture.ev : lists.fixedApertureEv;
 
         if (callback) {
             if(settings && settings.shutter && settings.iso) {
@@ -152,27 +129,33 @@ camera.getEv = function(callback) {
     });
 }
 
+var lastParam = null;
 camera.setEv = function(ev, options, cb) {
     if (!options) options = {};
     var doSet = function(settings) {
-        var shutter = settings.shutter;
-        var aperture = settings.aperture;
-        var iso = settings.iso;
+        var shutter = settings.details.shutter;
+        var aperture = settings.details.aperture;
+        var iso = settings.details.iso;
+
+        var apertureEnabled = false;
+        //var shutterEnabled = true; //to be added
+        if(options.parameters && options.parameters.indexOf('A') !== -1) apertureEnabled = true
+        // if(options.parameters && options.parameters.indexOf('I') === -1) shutterEnabled = false // defaults to enabled
 
         if (!aperture) {
-            options.apertureEnabled = false;
+            apertureEnabled = false;
             aperture = {
-                ev: camera.fixedApertureEv
+                ev: lists.fixedApertureEv
             };
         }
 
-        console.log("current shutter", shutter);
-        console.log("current aperture", aperture);
-        console.log("current iso", iso);
+        //console.log("current shutter", shutter);
+        //console.log("current aperture", aperture);
+        //console.log("current iso", iso);
 
-        var shutterList = camera.ptp.settings.lists.shutter;
-        var apertureList = camera.ptp.settings.lists.aperture;
-        var isoList = camera.ptp.settings.lists.iso;
+        var shutterList = settings.lists.shutter;
+        var apertureList = settings.lists.aperture;
+        var isoList = settings.lists.iso;
 
         //console.log("options: ", options);
 
@@ -185,7 +168,7 @@ camera.setEv = function(ev, options, cb) {
         if (shutterList && options && options.maxShutterLengthMs) {
             var maxSeconds = Math.floor(options.maxShutterLengthMs / 1000);
             if(maxSeconds < 1) maxSeconds = 1;
-            console.log("MAX seconds for shutter: ", maxSeconds);
+            //console.log("MAX seconds for shutter: ", maxSeconds);
             shutterList = shutterList.filter(function(item) {
                 return lists.getSecondsFromEv(item.ev) <= maxSeconds;
             });
@@ -208,23 +191,28 @@ camera.setEv = function(ev, options, cb) {
         }
         if (apertureList && options && options.apertureMax != null) {
             apertureList = apertureList.filter(function(item) {
-                return item.ev >= options.apertureMax;
+                return item.ev <= options.apertureMax;
             });
         }
         if (apertureList && options && options.apertureMin != null) {
             apertureList = apertureList.filter(function(item) {
-                return item.ev <= options.apertureMin;
+                return item.ev >= options.apertureMin;
             });
         }
 
-        //console.log("isoList3: ", isoList);
+        //console.log("apertureList: ", apertureList);
 
-        var currentEv = lists.getEv(shutter.ev, aperture.ev, iso.ev);
-        console.log("setEv: currentEv: ", currentEv);
-        console.log("setEv: newEv: ", ev);
+        var currentEv = null;
+        if(shutter && aperture && iso && shutter.ev != null && aperture.ev != null && iso.ev != null) {
+            currentEv = lists.getEv(shutter.ev, aperture.ev, iso.ev);
+        }
+        console.log("setEv: currentEv: ", currentEv, "targetEv:", ev);
 
-        if (ev === null) {
-            if (cb) cb(null, {
+        console.log("setEv: list lengths: s:", shutterList ? shutterList.length : -1, "i:", isoList ? isoList.length : -1, "a:", apertureList ? apertureList.length : -1);
+
+        if (ev === null || currentEv === null) {
+            console.log("setEv: unable to set ev, insufficient settings available");
+            if (cb) cb("unable to set ev, insufficient settings available", {
                 ev: currentEv,
                 shutter: shutter,
                 aperture: aperture,
@@ -233,20 +221,26 @@ camera.setEv = function(ev, options, cb) {
             return;
         }
 
+        if(!options.blendParams) lastParam = null;
+
         for (var trys = 0; trys < 3; trys++) {
             while (ev < currentEv - 1 / 6) {
                 //console.log("ev < currentEv");
                 var s = lists.decEv(shutter, shutterList);
-                if (options.apertureEnabled) var a = lists.decEv(aperture, apertureList);
+                if (apertureEnabled) var a = lists.decEv(aperture, apertureList);
                 var i = lists.decEv(iso, isoList);
 
-                if (s && shutter.ev != s.ev) {
+                if (s && shutter.ev != s.ev && lastParam != 's') {
                     shutter = s;
-                } else if (options.apertureEnabled && a && aperture.ev != a.ev) {
+                    if(options.blendParams) lastParam = 's';
+                } else if (apertureEnabled && a && aperture.ev != a.ev && lastParam != 'a') {
                     aperture = a;
-                } else if (i && iso.ev != i.ev) {
+                    if(options.blendParams) lastParam = 'a';
+                } else if (i && iso.ev != i.ev && lastParam != 'i') {
                     iso = i;
+                    if(options.blendParams) lastParam = 'i';
                 } else {
+                    lastParam = null;
                     currentEv = lists.getEv(shutter.ev, aperture.ev, iso.ev);
                     break;
                 }
@@ -257,16 +251,20 @@ camera.setEv = function(ev, options, cb) {
             while (ev > currentEv + 1 / 6) {
                 //console.log("ev > currentEv");
                 var s = lists.incEv(shutter, shutterList);
-                if (options.apertureEnabled) var a = lists.incEv(aperture, apertureList);
+                if (apertureEnabled) var a = lists.incEv(aperture, apertureList);
                 var i = lists.incEv(iso, isoList);
 
-                if (i && iso.ev != i.ev) {
+                if (i && iso.ev != i.ev && lastParam != 'i') {
                     iso = i;
-                } else if (options.apertureEnabled && a && aperture.ev != a.ev) {
+                    if(options.blendParams) lastParam = 'i';
+                } else if (apertureEnabled && a && aperture.ev != a.ev && lastParam != 'a') {
                     aperture = a;
-                } else if (s && shutter.ev != s.ev) {
+                    if(options.blendParams) lastParam = 'a';
+                } else if (s && shutter.ev != s.ev && lastParam != 's') {
                     shutter = s;
+                    if(options.blendParams) lastParam = 's';
                 } else {
+                    lastParam = null;
                     currentEv = lists.getEv(shutter.ev, aperture.ev, iso.ev);
                     break;
                 }
@@ -279,7 +277,7 @@ camera.setEv = function(ev, options, cb) {
         }
 
 
-        console.log("   done: ", currentEv);
+        console.log("setEv: finalEv: ", currentEv);
 
         function runQueue(queue, callback) {
             set = queue.pop();
@@ -296,17 +294,26 @@ camera.setEv = function(ev, options, cb) {
             }
         }
 
+        if(options.doNotSet) {
+            if (cb) return cb(null, {
+                ev: currentEv,
+                shutter: shutter,
+                aperture: aperture,
+                iso: iso
+            }); else return;
+        }
+
         var setQueue = [];
 
-        if (shutter.ev != settings.shutter.ev) setQueue.push({
+        if (shutter.ev != settings.details.shutter.ev) setQueue.push({
             name: 'shutter',
             val: shutter.cameraName || shutter.name
         });
-        if (options.apertureEnabled && aperture.ev != settings.aperture.ev) setQueue.push({
+        if (apertureEnabled && aperture.ev != settings.details.aperture.ev) setQueue.push({
             name: 'aperture',
             val: aperture.cameraName || aperture.name
         });
-        if (iso.ev != settings.iso.ev) setQueue.push({
+        if (iso.ev != settings.details.iso.ev) setQueue.push({
             name: 'iso',
             val: iso.cameraName || iso.name
         });
@@ -322,76 +329,102 @@ camera.setEv = function(ev, options, cb) {
         });
     }
 
-    if (options && options.settingsDetails) {
+    if (options && options.cameraSettings) {
         console.log("setEv: using provided settings");
-        doSet(options.settingsDetails);
+        doSet(options.cameraSettings);
     } else {
         camera.ptp.getSettings(function() {
             console.log("setEv: retreived settings from camera");
-            var settings = camera.ptp.settings.details;
+            var settings = camera.ptp.settings;
             doSet(settings);
         });
     }
 
 }
 
-camera.evStats = function(settings, options) {
-    var res = {};
-    if (settings.details) settings = settings.details;
-
-    var av = (settings.aperture && settings.aperture.ev != null) ? settings.aperture.ev : camera.fixedApertureEv;
-
-    res.ev = null;
-    if (settings.shutter && settings.shutter.ev != null && settings.iso && settings.iso.ev != null) res.ev = lists.getEv(settings.shutter.ev, av, settings.iso.ev);
-
-    res.shutterList = camera.ptp.settings.lists.shutter;
-    res.apertureList = camera.ptp.settings.lists.aperture;
-    res.isoList = camera.ptp.settings.lists.iso;
-
-    if (options && options.maxShutterLengthMs) {
-        res.shutterList = res.shutterList.filter(function(item) {
-            return lists.getSecondsFromEv(item.ev) * 1000 < options.maxShutterLengthMs;
-        });
+camera.setExposure = function(shutterEv, apertureEv, isoEv, cb) {
+    function runQueue(queue, callback) {
+        set = queue.pop();
+        if (set) {
+            console.log("setEv: setting ", set.name);
+            camera.ptp.set(set.name, set.val, function() {
+                setTimeout(function() {
+                    runQueue(queue, callback)
+                });
+            });
+        } else {
+            if (callback) callback();
+            return;
+        }
     }
-    if (options && options.shutterMax != null) {
-        res.shutterList = res.shutterList.filter(function(item) {
-            return item.ev >= options.shutterMax;
-        });
+    function getItemFromEvList(list, ev) {
+        if(!list) return null;
+        list = lists.cleanEvCopy(list);
+        var minDiff = Infinity;
+        var correction = 0;
+        var item = null;
+        for(var i = 0; i < list.length; i++) {
+            var diff = Math.abs(ev - list[i].ev);
+            if(diff < minDiff) {
+                correction = ev - list[i].ev;
+                minDiff = diff;
+                item = list[i];
+            }
+        }
+        if(item) {
+            return { item: item, correction: correction };
+        } else {
+            return null;
+        }
     }
-    if (options && options.isoMax != null) {
-        res.isoList = res.isoList.filter(function(item) {
-            return item.ev >= options.isoMax;
-        });
+
+    var setQueue = [];
+
+    var correction = 0;
+
+    if (shutterEv != null && (!camera.ptp.settings.details || camera.ptp.settings.details.shutter || shutterEv != camera.ptp.settings.details.shutter.ev)) {
+        var res = getItemFromEvList(camera.ptp.settings.lists.shutter, shutterEv);
+        if(res != null) {
+            correction = res.correction;
+            setQueue.push({
+                name: 'shutter',
+                val: res.item.cameraName || res.item.name
+            });
+        }
     }
-    if (options && options.isoMin != null) {
-        res.isoList = res.isoList.filter(function(item) {
-            return item.ev <= options.isoMin;
-        });
+    if (apertureEv != null && (!camera.ptp.settings.details || camera.ptp.settings.details.aperture || apertureEv != camera.ptp.settings.details.aperture.ev)) {
+        var res = getItemFromEvList(camera.ptp.settings.lists.aperture, apertureEv + correction);
+        if(res != null) {
+            correction = res.correction;
+            setQueue.push({
+                name: 'aperture',
+                val: res.item.cameraName || res.item.name
+            });
+        }
+    }
+    if (isoEv != null && (!camera.ptp.settings.details || camera.ptp.settings.details.iso || isoEv != camera.ptp.settings.details.iso.ev)) {
+        var res = getItemFromEvList(camera.ptp.settings.lists.iso, isoEv + correction);
+        if(res != null) {
+            correction = res.correction;
+            setQueue.push({
+                name: 'iso',
+                val: res.item.cameraName || res.item.name
+            });
+        }
     }
 
-    res.shutterEvMin = lists.getMinEv(res.shutterList);
-    res.shutterEvMax = lists.getMaxEv(res.shutterList);
-    res.apertureEvMin = av; //lists.getMinEv(res.apertureList);
-    res.apertureEvMax = av; //lists.getMaxEv(res.apertureList);
-    res.isoEvMin = lists.getMinEv(res.isoList);
-    res.isoEvMax = lists.getMaxEv(res.isoList);
-
-    // 16 = 10 + eS (6) + eI (0)
-    //  3 = 10 + eS (-1) + eI (-6)
-
-    res.minEv = res.shutterEvMin + 6 + res.apertureEvMin + 8 + res.isoEvMin;
-    res.maxEv = res.shutterEvMax + 6 + res.apertureEvMax + 8 + res.isoEvMax;
-
-    return res;
+    runQueue(setQueue, function() {
+        if (cb) camera.getEv(cb);
+    });
 }
 
 camera.minEv = function(settings, options) {
-    var stats = camera.evStats(settings, options);
+    var stats = lists.evStats(settings, options);
     return stats.minEv;
 }
 
 camera.maxEv = function(settings, options) {
-    var stats = camera.evStats(settings, options);
+    var stats = lists.evStats(settings, options);
     return stats.maxEv;
 }
 
