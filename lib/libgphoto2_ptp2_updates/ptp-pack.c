@@ -2034,10 +2034,10 @@ ptp_unpack_CANON_changes (PTPParams *params, unsigned char* data, int datasize, 
 				break;
 			}
 
-			ptp_debug (params, "event %d: EOS prop %04x desc record, datasize %d, propxtype %d", i, proptype, size-PTP_ece_Prop_Desc_Data, propxtype);
 			for (j=0;j<params->nrofcanon_props;j++)
 				if (params->canon_props[j].proptype == proptype)
 					break;
+			ptp_debug (params, "event %d: EOS prop %04x (%d) desc record, datasize %d, propxtype %d", i, proptype, j, size-PTP_ece_Prop_Desc_Data, propxtype);
 			if (j==params->nrofcanon_props) {
 				ptp_debug (params, "event %d: propdesc %x, default value not found.", i, proptype);
 				break;
@@ -2109,6 +2109,8 @@ ptp_unpack_CANON_changes (PTPParams *params, unsigned char* data, int datasize, 
 					break;
 				}
 			}
+			if(proptype == 0xd103) ptp_debug (params, "event %d: prop is 0x%04x, current value is 0x%04x",
+				   i, proptype, dpd->CurrentValue.u16);
 			break;
 		}
 		case PTP_EC_CANON_EOS_PropValueChanged:
@@ -2122,10 +2124,10 @@ ptp_unpack_CANON_changes (PTPParams *params, unsigned char* data, int datasize, 
 					ptp_debug (params, "size %d is smaller than %d", size, PTP_ece_Prop_Val_Data);
 					break;
 				}
-				ptp_debug (params, "event %d: EOS prop %04x info record, datasize is %d", i, proptype, size-PTP_ece_Prop_Val_Data);
 				for (j=0;j<params->nrofcanon_props;j++)
 					if (params->canon_props[j].proptype == proptype)
 						break;
+				ptp_debug (params, "event %d: EOS prop %04x (%d) info record, datasize is %d", i, proptype, j, size-PTP_ece_Prop_Val_Data);
 				if (j<params->nrofcanon_props) {
 					if (	(params->canon_props[j].size != size) ||
 						(memcmp(params->canon_props[j].data,xdata,size-PTP_ece_Prop_Val_Data))) {
@@ -2433,8 +2435,8 @@ ptp_unpack_CANON_changes (PTPParams *params, unsigned char* data, int datasize, 
 				/* 6 bytes: 01 01 98 10 00 60 */
 				/* this seesm to be the shutter speed record */
 				proptype = PTP_DPC_CANON_EOS_ShutterSpeed;
-				dpd = _lookup_or_allocate_canon_prop(params, proptype);
-				dpd->CurrentValue.u16 = curdata[curoff+5]; /* just use last byte */
+				//dpd = _lookup_or_allocate_canon_prop(params, proptype);
+				//dpd->CurrentValue.u16 = curdata[curoff+5]; /* just use last byte */
 
 				ce[i].type = PTP_CANON_EOS_CHANGES_TYPE_PROPERTY;
 				ce[i].u.propid = proptype;
@@ -2445,8 +2447,8 @@ ptp_unpack_CANON_changes (PTPParams *params, unsigned char* data, int datasize, 
 				/* 5 bytes: 01 01 5b 30 30 */
 				/* this seesm to be the aperture record */
 				proptype = PTP_DPC_CANON_EOS_Aperture;
-				dpd = _lookup_or_allocate_canon_prop(params, proptype);
-				dpd->CurrentValue.u16 = curdata[curoff+4]; /* just use last byte */
+				//dpd = _lookup_or_allocate_canon_prop(params, proptype);
+				//dpd->CurrentValue.u16 = curdata[curoff+4]; /* just use last byte */
 
 				ce[i].type = PTP_CANON_EOS_CHANGES_TYPE_PROPERTY;
 				ce[i].u.propid = proptype;
@@ -2457,8 +2459,8 @@ ptp_unpack_CANON_changes (PTPParams *params, unsigned char* data, int datasize, 
 				/* 5 bytes: 01 01 00 78 */
 				/* this seesm to be the aperture record */
 				proptype = PTP_DPC_CANON_EOS_ISOSpeed;
-				dpd = _lookup_or_allocate_canon_prop(params, proptype);
-				dpd->CurrentValue.u16 = curdata[curoff+3]; /* just use last byte */
+				//dpd = _lookup_or_allocate_canon_prop(params, proptype);
+				//dpd->CurrentValue.u16 = curdata[curoff+3]; /* just use last byte */
 
 				ce[i].type = PTP_CANON_EOS_CHANGES_TYPE_PROPERTY;
 				ce[i].u.propid = proptype;
@@ -2668,12 +2670,18 @@ ptp_unpack_CANON_changes (PTPParams *params, unsigned char* data, int datasize, 
 		if (i >= entries) {
 			ptp_debug (params, "BAD: i %d, entries %d", i, entries);
 		}
+		if(params->nrofcanon_props >= 5) ptp_debug (params, "ev %d ----> EOS ISO: %04x", i, params->canon_props[5].dpd.CurrentValue.u16);
 	}
 	if (!i) {
 		free (ce);
 		ce = NULL;
 	}
 	*pce = ce;
+
+	// debug EOS R -- somewhere this is changing...
+	if(params->nrofcanon_props >= 5) ptp_debug (params, "----> EOS ISO: %04x", params->canon_props[5].dpd.CurrentValue.u16);
+
+
 	return i;
 }
 

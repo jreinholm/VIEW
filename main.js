@@ -247,9 +247,19 @@ if (VIEW_HARDWARE) {
             } else {
                 console.log("WIFI: disconnected, trying to reconnect to " + previousConnection.ssid);
                 wifiConnectionTime = new Date().getTime();
-                wifi.disable(function(){
-                    setTimeout(configureWifi, 2000);
-                });
+                var btMotion = false;
+                if(core.motionStatus.nmxConnectedBt || core.motionStatus.gmConnectedBt) btMotion = true;
+                if(core.intervalometerStatus.running && btMotion) { // don't reset wifi module if BT motion is connected
+                    db.get('wifi-status', function(err, wifiStatus) {
+                        if(wifiStatus && wifiStatus.enabled && wifiStatus.connect) {
+                            wifi.connect(wifiStatus.connect, wifiStatus.password);
+                        }
+                    });
+                } else {
+                    wifi.disable(function(){
+                        setTimeout(configureWifi, 2000);
+                    });
+                }
             }
         }
         ui.reload();
@@ -732,13 +742,13 @@ if (VIEW_HARDWARE) {
             type: "options",
             items: []
         }
-        for (var i = 6; i < 12; i++) res.items.push({
+        for (var i = 6; i < 12; i += 0.5) res.items.push({
             name: "Night Interval",
             help: help.nightInterval,
             value: i + " seconds",
             action: ui.set(core.currentProgram.exposurePlans[planIndex], 'nightInterval', i)
         });
-        for (var i = 12; i < 35; i += 2) res.items.push({
+        for (var i = 12; i < 35; i += 1) res.items.push({
             name: "Night Interval",
             help: help.nightInterval,
             value: i + " seconds",
@@ -804,13 +814,13 @@ if (VIEW_HARDWARE) {
                 action: ui.set(core.currentProgram.exposurePlans[planIndex], 'dayInterval', i)
             });
         }
-        for (var i = 5; i < 12; i++) res.items.push({
+        for (var i = 5; i < 12; i += 0.5) res.items.push({
             name: "Day Interval",
             help: help.dayInterval,
             value: i + " seconds",
             action: ui.set(core.currentProgram.exposurePlans[planIndex], 'dayInterval', i)
         });
-        for (var i = 12; i < 35; i += 2) res.items.push({
+        for (var i = 12; i < 35; i += 1) res.items.push({
             name: "Day Interval",
             help: help.dayInterval,
             value: i + " seconds",
@@ -841,13 +851,13 @@ if (VIEW_HARDWARE) {
             action: ui.set(core.currentProgram, 'interval', i)
         });
     }
-    for (var i = 5; i < 12; i++) interval.items.push({
+    for (var i = 5; i < 12; i += 0.5) interval.items.push({
         name: "Interval",
         help: help.interval,
         value: i + " seconds",
         action: ui.set(core.currentProgram, 'interval', i)
     });
-    for (var i = 12; i < 35; i += 2) interval.items.push({
+    for (var i = 12; i < 35; i += 1) interval.items.push({
         name: "Interval",
         help: help.interval,
         value: i + " seconds",
@@ -1759,6 +1769,10 @@ if (VIEW_HARDWARE) {
         }
     }
 
+    var getMotor = function(motorName, callback) {
+        db.get('motion-'+motorName, callback);
+    } 
+
     var exposurePlansReview = function() {
         var info = "";
         var pad = "- ";
@@ -2028,6 +2042,8 @@ if (VIEW_HARDWARE) {
                     if(!core.currentProgram.coords) {
                         core.currentProgram.tracking = 'none';
                     }
+                    oled.timelapseStatus = null;
+
 
                     if(core.currentProgram.tracking != 'none') {
                         var autoOrient = motorOrientationKnown();
@@ -2035,40 +2051,65 @@ if (VIEW_HARDWARE) {
                         if(core.currentProgram.tracking != "15deg" && (autoOrient && autoOrient.pan)) {
                             panMotor = autoOrient.pan;
                         }
-                        if(panMotor) {
-                            if(core.currentProgram.tracking == "15deg") {
-                                core.currentProgram.axes[panMotor.name] = {
-                                    type: 'constant',
-                                    orientation: 'pan',
-                                    rate: 15,
-                                    reverse: panMotor.reverse
-                                }
+                        var checkTilt = function(){
+                            var tiltMotor = (autoOrient && autoOrient.tilt) ? autoOrient.tilt : getTrackingMotor(core.currentProgram.trackingTiltMotor);
+                            if(tiltMotor) {
+                                getMotor(tiltMotor.name, function(err, tMotor) {
+                                    if(err || !tMotor) {
+                                        tMotor = tiltMotor;
+                                    }
+                                    core.currentProgram.trackingTarget = core.currentProgram.tracking;
+                                    core.currentProgram.axes[tiltMotor.name] = {
+                                        type: 'tracking',
+                                        orientation: 'tilt',
+                                        trackBelowHorizon: false,
+                                        reverse: tiltMotor.reverse,
+                                        motor: tMotor
+                                    }
+                                    core.currentProgram[tiltMotor.name + "Pos"] = 0;
+                                    core.startIntervalometer(core.currentProgram);
+                                    cb();
+                                });
                             } else {
-                                core.currentProgram.trackingTarget = core.currentProgram.tracking;
-                                core.currentProgram.axes[panMotor.name] = {
-                                    type: 'tracking',
-                                    orientation: 'pan',
-                                    trackBelowHorizon: false,
-                                    reverse: panMotor.reverse
+                                core.startIntervalometer(core.currentProgram);
+                                cb();
+                            }
+                        }
+                        if(panMotor) {
+                            getMotor(panMotor.name, function(err, pMotor) {
+                                if(err || !pMotor) {
+                                    pMotor = panMotor;
                                 }
-                            }
-                            core.currentProgram[panMotor.name + "Pos"] = 0;
+                                core.currentProgram[panMotor.name + "Pos"] = 0;
+                                if(core.currentProgram.tracking == "15deg") {
+                                    core.currentProgram.axes[panMotor.name] = {
+                                        type: 'constant',
+                                        orientation: 'pan',
+                                        rate: 15,
+                                        reverse: panMotor.reverse,
+                                        motor: pMotor
+                                    }
+                                    core.startIntervalometer(core.currentProgram);
+                                    cb();
+                                } else {
+                                    core.currentProgram.trackingTarget = core.currentProgram.tracking;
+                                    core.currentProgram.axes[panMotor.name] = {
+                                        type: 'tracking',
+                                        orientation: 'pan',
+                                        trackBelowHorizon: false,
+                                        reverse: panMotor.reverse,
+                                        motor: pMotor
+                                    }
+                                    checkTilt();
+                                }
+                            });
+                        } else {
+                            checkTilt();
                         }
-                        var tiltMotor = (autoOrient && autoOrient.tilt) ? autoOrient.tilt : getTrackingMotor(core.currentProgram.trackingTiltMotor);
-                        if(tiltMotor) {
-                            core.currentProgram.trackingTarget = core.currentProgram.tracking;
-                            core.currentProgram.axes[tiltMotor.name] = {
-                                type: 'tracking',
-                                orientation: 'tilt',
-                                trackBelowHorizon: false,
-                                reverse: tiltMotor.reverse
-                            }
-                            core.currentProgram[tiltMotor.name + "Pos"] = 0;
-                        }
+                    } else {
+                        core.startIntervalometer(core.currentProgram);
+                        cb();
                     }
-                    oled.timelapseStatus = null;
-                    core.startIntervalometer(core.currentProgram);
-                    cb();
                 }
             }
         }, ]
@@ -2394,6 +2435,8 @@ if (VIEW_HARDWARE) {
     }
 
     var versionUpdateConfirmMenuBuild = function(versionTarget) {
+        var statusValue = null;
+        var cancelPrompt = false;
         return {
             name: "Install version " + versionTarget.version + "?",
             type: "options",
@@ -2494,17 +2537,42 @@ if (VIEW_HARDWARE) {
                                         });
                                     } else {
                                         wifi.unblockBt();
+                                        core.watchdogEnable();
+                                        power.enableAutoOff();
                                         ui.status('error updating');
                                         if(cb) cb();
                                         ui.back();
                                     }
                                 }, function(statusUpdate) {
-                                    oled.value([{
+                                    oled.activity();
+                                    statusValue = [{
                                         name: statusUpdate,
-                                        value: "Please Wait"
-                                    }]);
-                                    ui.status(statusUpdate);
-                                    oled.update();
+                                        value: "Please Wait",
+                                        button3: function() {
+                                            oled.value([{
+                                                name: "Cancel firmware download?",
+                                                value: "go back",
+                                                action: function() {
+                                                    cancelPrompt = false;
+                                                    oled.value(statusValue);
+                                                    oled.update();
+                                                }
+                                            },{
+                                                name: "Cancel firmware download?",
+                                                value: "cancel download",
+                                                action: function() {
+                                                    cancelPrompt = false;
+                                                    updates.cancel(); // needs confirmation prompt
+                                                }
+                                            }]);
+                                            oled.update();
+                                        }
+                                    }];
+                                    if(!cancelPrompt) {
+                                        oled.value(statusValue);
+                                        ui.status(statusUpdate);
+                                        oled.update();
+                                    }
                                     oled.activity();
                                 });
                             }
@@ -2514,6 +2582,7 @@ if (VIEW_HARDWARE) {
             }]
         }
     }
+
 
     var softwareMenu = function(cb) {
         var buildUpdateMenu = function(err, versions) {
@@ -2979,6 +3048,282 @@ if (VIEW_HARDWARE) {
         }]
     }
 
+    db.get('auxPulseLength', function(err, length) {
+        if(!err && length) {
+            core.setAuxPulseLength(length);
+        } else {
+            core.setAuxPulseLength(200);
+        }
+    });
+
+    db.get('auxPulseInvert', function(err, invert) {
+        if(!err && invert == 'yes') {
+            core.setAuxPulseInvert(true);
+        } else {
+            core.setAuxPulseInvert(false);
+        }
+    });
+
+    var auxPulseLengthMenu = {
+        name: "AUX2 Pulse Length",
+        type: "options",
+        items: [{
+            name: "AUX2 Pulse Length",
+            value: "100ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 100, function(cb){
+                db.set('auxPulseLength', 100);
+                core.setAuxPulseLength(100);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "200ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 200, function(cb){
+                db.set('auxPulseLength', 200);
+                core.setAuxPulseLength(200);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "300ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 300, function(cb){
+                db.set('auxPulseLength', 300);
+                core.setAuxPulseLength(300);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "400ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 400, function(cb){
+                db.set('auxPulseLength', 400);
+                core.setAuxPulseLength(400);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "500ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 500, function(cb){
+                db.set('auxPulseLength', 500);
+                core.setAuxPulseLength(500);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "600ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 600, function(cb){
+                db.set('auxPulseLength', 600);
+                core.setAuxPulseLength(600);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "700ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 700, function(cb){
+                db.set('auxPulseLength', 700);
+                core.setAuxPulseLength(700);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "800ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 800, function(cb){
+                db.set('auxPulseLength', 800);
+                core.setAuxPulseLength(800);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "900ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 900, function(cb){
+                db.set('auxPulseLength', 900);
+                core.setAuxPulseLength(900);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "1000ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 1000, function(cb){
+                db.set('auxPulseLength', 1000);
+                core.setAuxPulseLength(1000);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "1200ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 1200, function(cb){
+                db.set('auxPulseLength', 1200);
+                core.setAuxPulseLength(1200);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "1400ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 1400, function(cb){
+                db.set('auxPulseLength', 1400);
+                core.setAuxPulseLength(1400);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "1600ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 1600, function(cb){
+                db.set('auxPulseLength', 1600);
+                core.setAuxPulseLength(1600);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "1800ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 1800, function(cb){
+                db.set('auxPulseLength', 1800);
+                core.setAuxPulseLength(1800);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "2000ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 2000, function(cb){
+                db.set('auxPulseLength', 2000);
+                core.setAuxPulseLength(2000);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "2500ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 2500, function(cb){
+                db.set('auxPulseLength', 2500);
+                core.setAuxPulseLength(2500);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "3000ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 3000, function(cb){
+                db.set('auxPulseLength', 3000);
+                core.setAuxPulseLength(3000);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "4000ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 4000, function(cb){
+                db.set('auxPulseLength', 4000);
+                core.setAuxPulseLength(4000);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "5000ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 5000, function(cb){
+                db.set('auxPulseLength', 5000);
+                core.setAuxPulseLength(5000);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "6000ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 6000, function(cb){
+                db.set('auxPulseLength', 6000);
+                core.setAuxPulseLength(6000);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "7000ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 7000, function(cb){
+                db.set('auxPulseLength', 7000);
+                core.setAuxPulseLength(7000);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "8000ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 8000, function(cb){
+                db.set('auxPulseLength', 8000);
+                core.setAuxPulseLength(8000);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "9000ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 9000, function(cb){
+                db.set('auxPulseLength', 9000);
+                core.setAuxPulseLength(9000);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Length",
+            value: "10000ms",
+            help: help.auxPulseLength,
+            action: ui.set(core, 'auxPulseLength', 10000, function(cb){
+                db.set('auxPulseLength', 10000);
+                core.setAuxPulseLength(10000);
+                cb && cb();
+            })
+        }]
+    }
+
+    var auxPulseInvertMenu = {
+        name: "AUX2 Pulse Invert",
+        type: "options",
+        items: [{
+            name: "AUX2 Pulse Invert",
+            value: "No (closed=move)",
+            help: help.auxPulseInvert,
+            action: ui.set(core, 'auxPulseInvert', 'no', function(cb){
+                db.set('auxPulseInvert', 'no');
+                core.setAuxPulseInvert(false);
+                cb && cb();
+            })
+        }, {
+            name: "AUX2 Pulse Invert",
+            value: "Yes (open=move)",
+            help: help.auxPulseInvert,
+            action: ui.set(core, 'auxPulseInvert', 'yes', function(cb){
+                db.set('auxPulseInvert', 'yes');
+                core.setAuxPulseInvert(true);
+                cb && cb();
+            })
+        }]
+    }
+
+    var motionSetupMenuAUX = {
+        name: "AUX Setup",
+        type: "menu",
+        items: [{
+            name: "Pulse Length",
+            help: help.auxPulseLength,
+            action: auxPulseLengthMenu
+        }, {
+            name: "Invert Pulse",
+            help: help.auxPulseInvert,
+            action: auxPulseInvertMenu
+        }]
+    }
+
     var motionSetupMenu = {
         name: "NMX Setup",
         type: "menu",
@@ -2986,6 +3331,10 @@ if (VIEW_HARDWARE) {
             name: "Configure NMX",
             help: help.configureNMX,
             action: motionSetupMenuNMX
+        },{
+            name: "AUX2 Sync Setup",
+            help: help.configureAUX,
+            action: motionSetupMenuAUX
         }]
     }
 
@@ -4051,6 +4400,8 @@ if (VIEW_HARDWARE) {
                 gestureVideoPlaying = false;
                 oled.stopVideo();
                 gestureModeTimer();
+            } else if(ui.currentOrigin() == 'alert') {
+                ui.back();
             } else {
                 gestureMode = false;
                 oled.hide();
@@ -4441,12 +4792,32 @@ app.on('message', function(msg) {
 
             case 'focus':
                 if (msg.key == "manual") {
-                    core.focus(msg.val, msg.repeat, function(err, pos){
-                        console.log("MAIN: focus complete");
-                        msg.reply('focus', {
-                            complete: true,
-                            position: pos
-                        });
+                    (function(lastLV) {
+                        if(!lastLV && core.cameraModel.match(/canon|nikon/i)) {
+                            core.preview(function(){
+                                core.focus(msg.val, msg.repeat, function(err, pos){
+                                    console.log("MAIN: focus complete");
+                                    msg.reply('focus', {
+                                        complete: true,
+                                        position: pos
+                                    });
+                                    core.lvOff();
+                                });
+                            });
+                        } else {
+                            core.focus(msg.val, msg.repeat, function(err, pos){
+                                console.log("MAIN: focus complete");
+                                msg.reply('focus', {
+                                    complete: true,
+                                    position: pos
+                                });
+                            });
+                        }
+                    })(liveviewOn);
+                } else {
+                    msg.reply('focus', {
+                        complete: true,
+                        position: pos
                     });
                 }
                 break;
@@ -4786,12 +5157,16 @@ app.on('message', function(msg) {
             case 'get':
                 if (msg.key == "settings") {
                     if (core.cameraConnected) {
-                        core.getSettings(function() {
-                            core.cameraSettings.stats = lists.evStats(core.cameraSettings);
-                            msg.reply('settings', {
-                                settings: core.cameraSettings
+                        if(core.intervalometerStatus && core.intervalometerStatus.running) {
+                            settings: core.cameraSettings
+                        } else {
+                            core.getSettings(function() {
+                                core.cameraSettings.stats = lists.evStats(core.cameraSettings);
+                                msg.reply('settings', {
+                                    settings: core.cameraSettings
+                                });
                             });
-                        });
+                        }
                     } else {
                         msg.reply('settings', {
                             settings: null,
@@ -4952,6 +5327,7 @@ core.on('camera.connected', function() {
         wifi.noReset = true;
         if(wifi.btEnabled) {
             wifi.blockBt();
+            console.log("MAIN: blocking BT for SonyWifi");
             btBlockedForSony = true;
         }
     }
@@ -5021,9 +5397,11 @@ core.on('intervalometer.status', function(msg) {
     //console.log("core.cameraSettings", core.cameraSettings);
     //return;
     if(msg.running) {
+        mcu.disableGpsTimeUpdate = true;
         power.disableAutoOff();
     } else if(cache.intervalometerStatus.running) {
         power.enableAutoOff();
+        mcu.disableGpsTimeUpdate = false;
     }
     app.send('intervalometerStatus', {
         status: msg

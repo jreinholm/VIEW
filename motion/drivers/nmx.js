@@ -76,9 +76,15 @@ var CMD_MOTOR_RESET = {
     hasAck: true,
     delay: 0
 }
-var CMD_MOTOR_MAX_SPEED = {
+var CMD_MOTOR_SET_MAX_SPEED = {
     cmd: 0x07,
     hasReponse: false,
+    hasAck: true,
+    delay: 0
+}
+var CMD_MOTOR_GET_MAX_SPEED = {
+    cmd: 0x68,
+    hasReponse: true,
     hasAck: true,
     delay: 0
 }
@@ -136,6 +142,7 @@ var nmx = new EventEmitter();
 var motorRunning = {'1': false, '2': false, '3': false};
 var motorPos = {'1': 0, '2': 0, '3': 0};
 var motorPosExact = {'1': 0, '2': 0, '3': 0};
+var motorMaxSpeed = {'1': 3000, '2': 3000, '3': 3000};
 var motorConnected = [false, false, false];
 var motorAttachment = [null, null, null];
 var motorBacklash = {'1': 0, '2': 0, '3': 0};
@@ -179,15 +186,27 @@ function getStatus() {
 }
 
 function move(motorId, steps, callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     console.log("NMX: (init) moving motor " + motorId + " by " + steps + " steps");
     if (motorRunning[motorId]) {
         console.log("NMX: motor already running");
         return callback && callback("NMX: motor already running");
     }
     if(!enabled[motorId]) enable(motorId);
-    if(inJoystickMode) return joystickMode(false, function() {
-        move(motorId, steps, callback);
-    });
+    if(inJoystickMode) {
+        inJoystickMode = null;
+        return joystickMode(false, function(err){
+            if(!err) {
+                move(motorId, steps, callback);
+            } else {
+                callback && callback("failed to exit joystick mode");
+            }
+        });
+    }
+
+
+
+
     steps = Math.round(steps);
     if(steps == 0) { // a move of zero steps triggers a bug in the NMX causing it to move extreme distances
         return callback && callback(null, motorPos[motorId]);
@@ -233,7 +252,7 @@ function move(motorId, steps, callback) {
             if (!err) {
                 (function check(mId) {
                     setTimeout(function() {
-                        checkMotorRunning(mId, function(moving) {
+                        checkMotorRunning(mId, function(err, moving) {
                             if(moving === undefined) return;
                             if (moving) {
                                 motorRunning[mId] = true;
@@ -248,6 +267,16 @@ function move(motorId, steps, callback) {
                                         if (callback) callback(tries > 5 ? "position not reached" : null, position);
                                     } else {
                                         tries++;
+                                        if(tries == 1 && motorPosExact[motorId] == position) { // didn't move at all
+                                            console.log("NMX: Motor didn't move, togging joystick and trying again...");
+                                            joystickMode(true, function(){
+                                                constantMove(motorId, 0, function(){
+                                                    joystickMode(false, function(){
+                                                        setTimeout(moveToAbsolutePos);
+                                                    });
+                                                });
+                                            });
+                                        }
                                         console.log("NMX: position not reached, trying again", tries);
                                         setTimeout(moveToAbsolutePos, 50);
                                     }
@@ -271,6 +300,7 @@ function move(motorId, steps, callback) {
 }
 
 function setAccel(motorId, rate, callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     if (motorRunning[motorId]) return console.log("NMX: motor running");
     console.log("NMX: setting accel for " + motorId);
 
@@ -290,6 +320,7 @@ function setAccel(motorId, rate, callback) {
 }
 
 function setMaxSpeed(motorId, speed, callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     if (motorRunning[motorId]) return console.log("NMX: motor running");
     console.log("NMX: setting max speed for " + motorId);
 
@@ -299,7 +330,7 @@ function setMaxSpeed(motorId, speed, callback) {
 
     var cmd = {
         motor: motorId,
-        command: CMD_MOTOR_MAX_SPEED,
+        command: CMD_MOTOR_SET_MAX_SPEED,
         dataBuf: m
     }
 
@@ -308,11 +339,29 @@ function setMaxSpeed(motorId, speed, callback) {
     });
 }
 
+function getMaxSpeed(motorId, callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
+    var cmd = {
+        motor: motorId,
+        command: CMD_MOTOR_GET_MAX_SPEED,
+        readback: true,
+        readbackDelayMs: 50
+    }
+    _queueCommand(cmd, function(err, maxSpeed) {
+        console.log("NMX: motor " + motorId + " maxSpeed: ", maxSpeed);
+        if(!err) motorMaxSpeed[motorId] = maxSpeed;
+        if (callback) callback(maxSpeed);
+    });
+}
+
+
+
 var inJoystickMode = null;
 var resetJoystickMode = false;
 var enabled = {};
 var joystickAxisBusy = {1: false, 2: false, 3: false};
 function constantMove(motorId, speed, callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     console.log("NMX: moving motor (constant) " + motorId + " at speed " + speed);
     if(!enabled[motorId]) enable(motorId);
     if(!inJoystickMode || resetJoystickMode) {
@@ -334,7 +383,7 @@ function constantMove(motorId, speed, callback) {
     m.fill(0);
 
     if(Math.abs(speed) < 1000) { // speed is percentage
-        var maxSpeed = 3000;
+        var maxSpeed = motorMaxSpeed[motorId];
         speed = Math.floor((speed / 100) * maxSpeed);
         if(speed > maxSpeed) speed = maxSpeed;
         if(speed < -maxSpeed) speed = -maxSpeed;
@@ -357,7 +406,7 @@ function constantMove(motorId, speed, callback) {
             if(speed == 0) {
                 (function checkC(mId) {
                     setTimeout(function() {
-                        checkMotorSpeed(mId, function(speed) {
+                        checkMotorSpeed(mId, function(err, speed) {
                             if(speed === undefined) return;
                             if (speed > 0) {
                                 motorRunning[mId] = true;
@@ -396,36 +445,39 @@ function constantMove(motorId, speed, callback) {
 }
 
 function checkJoystickMode(callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     var cmd = {
         motor: 0,
         command: CMD_CHECK_JOYSTICK_MODE
     }
     _queueCommand(cmd, function(err, jsMode) {
-        console.log("NMX: joystick mode: ", jsMode);
-        inJoystickMode = jsMode;
-        if (callback) callback(jsMode);
+        inJoystickMode = !!jsMode;
+        console.log("NMX: joystick mode: ", inJoystickMode);
+        if (callback) callback(err, inJoystickMode);
     });
 }
 
 function checkMotorRunning(motorId, callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     var cmd = {
         motor: motorId,
         command: CMD_MOTOR_STATUS
     }
     _queueCommand(cmd, function(err, moving) {
         console.log("NMX: motor " + motorId + " moving: ", moving);
-        if (callback) callback(moving);
+        if (callback) callback(err, moving);
     });
 }
 
 function checkMotorSpeed(motorId, callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     var cmd = {
         motor: motorId,
         command: CMD_MOTOR_CHECK_SPEED
     }
     _queueCommand(cmd, function(err, speed) {
         console.log("NMX: motor " + motorId + " moving at speed: ", speed);
-        if (callback) callback(speed);
+        if (callback) callback(err, speed);
     });
 }
 
@@ -445,6 +497,7 @@ function getMotorBacklash(motorId, callback) {
 }
 
 function setMotorBacklash(motorId, backlashSteps, callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     motorBacklash[motorId] = backlashSteps;
     if(_dev && _dev.connected) {
         var backlash = new Buffer(2);
@@ -467,22 +520,31 @@ function setMotorBacklash(motorId, backlashSteps, callback) {
 }
 
 function checkMotorAttachment(callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     var cmd = {
         motor: 0,
         command: CMD_CONNECTED_MOTORS
     }
-    _queueCommand(cmd, function(err, status) {
-        if(!err) {
-            motorConnected[0] = motorAttachment[0] === null ? ((status & 1<<0) ? true : false) : motorAttachment[0];
-            motorConnected[1] = motorAttachment[1] === null ? ((status & 1<<1) ? true : false) : motorAttachment[1];
-            motorConnected[2] = motorAttachment[2] === null ? ((status & 1<<2) ? true : false) : motorAttachment[2];
-            console.log("NMX: motors connected", motorConnected);
-        }
+    if(!motorRunning['1'] && !motorRunning['2'] && !motorRunning['3'] && (motorAttachment[0] === null || motorAttachment[1] === null || motorAttachment[2] === null)) {
+        _queueCommand(cmd, function(err, status) {
+            if(!err) {
+                motorConnected[0] = motorAttachment[0] === null ? ((status & 1<<0) ? true : false) : motorAttachment[0];
+                motorConnected[1] = motorAttachment[1] === null ? ((status & 1<<1) ? true : false) : motorAttachment[1];
+                motorConnected[2] = motorAttachment[2] === null ? ((status & 1<<2) ? true : false) : motorAttachment[2];
+                console.log("NMX: motors connected", motorConnected);
+            }
+            if (callback) callback(motorConnected);
+        });
+    } else {
+        motorConnected[0] = motorAttachment[0] === null ? motorConnected[0] : motorAttachment[0];
+        motorConnected[1] = motorAttachment[1] === null ? motorConnected[1] : motorAttachment[1];
+        motorConnected[2] = motorAttachment[2] === null ? motorConnected[2] : motorAttachment[2];
         if (callback) callback(motorConnected);
-    });
+    }
 }
 
 function setMotorAttachment(motor, status, callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     console.log("NMX: setting motor attachment:", motor, status);
     motor--;
     if(motor < 0) motor = 0;
@@ -498,6 +560,7 @@ function setMotorAttachment(motor, status, callback) {
 
 
 function checkMotorPosition(motorId, callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     var cmd = {
         motor: motorId,
         command: CMD_MOTOR_POSITION,
@@ -512,6 +575,7 @@ function checkMotorPosition(motorId, callback) {
 }
 
 function firmwareVersion(callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     var cmd = {
         motor: 0,
         command: CMD_FIRMWARE_VERSION,
@@ -560,6 +624,7 @@ function setMotorPosition(motorId, position, callback) {
     });
 }
 function setProgramMode(mode, callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     var cmd = {
         motor: 0,
         command: CMD_PROGRAM_MODE,
@@ -571,6 +636,7 @@ function setProgramMode(mode, callback) {
     });
 }
 function setAppMode(callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     var cmd = {
         motor: 0,
         command: CMD_APP_MODE,
@@ -583,6 +649,7 @@ function setAppMode(callback) {
 }
 
 function joystickWatchdog(callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     var cmd = {
         motor: 0,
         command: CMD_JOYSTICK_WATCHDOG,
@@ -593,10 +660,11 @@ function joystickWatchdog(callback) {
 
 var enteringJoystickMode = false;
 function joystickMode(en, callback) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     console.log("NMX: setting joystick mode to ", en);
     var checkMode = function(tries){
         if(!tries) tries = 0;
-        checkJoystickMode(function(jsMode){
+        checkJoystickMode(function(err, jsMode){
             if(jsMode == en) {
                 enteringJoystickMode = false;
                 callback && callback(null);
@@ -635,6 +703,7 @@ function joystickMode(en, callback) {
 }
 
 function enable(motorId) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     if (!motorId) return;
     enabled[motorId] = true;
     var cmd = {
@@ -646,6 +715,7 @@ function enable(motorId) {
 }
 
 function disable(motorId) {
+    if(!_dev || !_dev.connected) callback && callback("not connected");
     if (!motorId) return;
     enabled[motorId] = false;
     var cmd = {
@@ -833,10 +903,10 @@ function init() {
         checkMotorPosition(1);
         checkMotorPosition(2);
         checkMotorPosition(3, function(){
-            nmx.emit("status", getStatus());
             motorPos[1] = motorPosExact[1];
             motorPos[2] = motorPosExact[2];
             motorPos[3] = motorPosExact[3];
+            nmx.emit("status", getStatus());
         });
     });
     firmwareVersion(function(err, version) {
@@ -845,12 +915,15 @@ function init() {
         //resetMotorPosition(1);
         //resetMotorPosition(2);
         //resetMotorPosition(3);
-        setAccel(1, 7500); // 2436.75 to 12675
-        setAccel(2, 7500);
-        setAccel(3, 7500);
-        setMaxSpeed(1, 3000);
-        setMaxSpeed(2, 3000);
-        setMaxSpeed(3, 3000);
+        //setAccel(1, 7500); // 2436.75 to 12675
+        //setAccel(2, 7500);
+        //setAccel(3, 7500);
+        //setMaxSpeed(1, 3000);
+        //setMaxSpeed(2, 3000);
+        //setMaxSpeed(3, 3000);
+        getMaxSpeed(1);
+        getMaxSpeed(2);
+        getMaxSpeed(3);
         if(motorBacklash['1'] > 0) setMotorBacklash(1, motorBacklash['1']);
         if(motorBacklash['2'] > 0) setMotorBacklash(2, motorBacklash['2']);
         if(motorBacklash['3'] > 0) setMotorBacklash(3, motorBacklash['3']);

@@ -224,7 +224,7 @@ camera.setEv = function(ev, options, cb) {
         if(!options.blendParams) lastParam = null;
 
         for (var trys = 0; trys < 3; trys++) {
-            while (ev < currentEv - 1 / 6) {
+            while (ev < currentEv - 1 / 4) {
                 //console.log("ev < currentEv");
                 var s = lists.decEv(shutter, shutterList);
                 if (apertureEnabled) var a = lists.decEv(aperture, apertureList);
@@ -248,7 +248,7 @@ camera.setEv = function(ev, options, cb) {
                 //console.log(" update: ", currentEv);
             }
 
-            while (ev > currentEv + 1 / 6) {
+            while (ev > currentEv + 1 / 4) {
                 //console.log("ev > currentEv");
                 var s = lists.incEv(shutter, shutterList);
                 if (apertureEnabled) var a = lists.incEv(aperture, apertureList);
@@ -272,7 +272,7 @@ camera.setEv = function(ev, options, cb) {
                 //console.log(" update: ", currentEv);
             }
 
-            if (Math.abs(ev - currentEv) <= 1 / 6) break;
+            if (Math.abs(ev - currentEv) <= 1 / 4) break;
 
         }
 
@@ -295,6 +295,7 @@ camera.setEv = function(ev, options, cb) {
         }
 
         if(options.doNotSet) {
+            console.log("setEv: done, not applying changes.");
             if (cb) return cb(null, {
                 ev: currentEv,
                 shutter: shutter,
@@ -319,6 +320,7 @@ camera.setEv = function(ev, options, cb) {
         });
 
         runQueue(setQueue, function() {
+            console.log("setEv: done.");
             if (cb) cb(null, {
                 ev: currentEv,
                 shutter: shutter,
@@ -382,7 +384,7 @@ camera.setExposure = function(shutterEv, apertureEv, isoEv, cb) {
 
     var correction = 0;
 
-    if (shutterEv != null && (!camera.ptp.settings.details || camera.ptp.settings.details.shutter || shutterEv != camera.ptp.settings.details.shutter.ev)) {
+    if (shutterEv != null && (!camera.ptp.settings.details || (camera.ptp.settings.details.shutter && shutterEv != camera.ptp.settings.details.shutter.ev))) {
         var res = getItemFromEvList(camera.ptp.settings.lists.shutter, shutterEv);
         if(res != null) {
             correction = res.correction;
@@ -392,7 +394,7 @@ camera.setExposure = function(shutterEv, apertureEv, isoEv, cb) {
             });
         }
     }
-    if (apertureEv != null && (!camera.ptp.settings.details || camera.ptp.settings.details.aperture || apertureEv != camera.ptp.settings.details.aperture.ev)) {
+    if (apertureEv != null && (!camera.ptp.settings.details || (camera.ptp.settings.details.aperture && apertureEv != camera.ptp.settings.details.aperture.ev))) {
         var res = getItemFromEvList(camera.ptp.settings.lists.aperture, apertureEv + correction);
         if(res != null) {
             correction = res.correction;
@@ -402,7 +404,7 @@ camera.setExposure = function(shutterEv, apertureEv, isoEv, cb) {
             });
         }
     }
-    if (isoEv != null && (!camera.ptp.settings.details || camera.ptp.settings.details.iso || isoEv != camera.ptp.settings.details.iso.ev)) {
+    if (isoEv != null && (!camera.ptp.settings.details || (camera.ptp.settings.details.iso && isoEv != camera.ptp.settings.details.iso.ev))) {
         var res = getItemFromEvList(camera.ptp.settings.lists.iso, isoEv + correction);
         if(res != null) {
             correction = res.correction;

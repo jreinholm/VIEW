@@ -116,9 +116,9 @@ process.on('message', function(msg) {
                 //waitEvent();
 
                 console.log('WORKER: Found', camera.model);
-                //GPhoto.onLog(0, function(level, dom, message) {
-                //    console.log("LIBGPHOTO2:", level, dom, message);
-                //});
+                GPhoto.onLog(0, function(level, dom, message) {
+                    console.log("LIBGPHOTO2:", level, dom, message);
+                });
 
                 getConfig(false, false, function() {
                     sendEvent('connected', camera.model);
@@ -229,13 +229,28 @@ function processRawPath(path, options, info, callback) {
                 if(err || stderr) {
                     console.log("WORKER: #################### ERROR SAVING RAW IMAGE:", err, stderr);
                     if(stderr.indexOf("No space left on device") !== -1) {
+                        sdWriting = false;
                         sendEvent('saveErrorCardFull', "Error saving RAW file " + dest + "\nNo space left on SD card.");
+                    } else if(stderr.indexOf("Input/output error") !== -1 || stderr.indexOf("Software caused connection abort") !== -1) { // unmount/mount, and try again first 
+                        exec("umount /media", function(err) {
+                            exec("mount /dev/mmcblk1p1 /media", function(err) {
+                                execFile('/bin/cp', ['--no-target-directory', path, dest], {}, function(err, stdout, stderr) {
+                                    if(err || stderr) {
+                                        sendEvent('saveError', "Error saving RAW file " + dest + "\nError code: " + err + ", message: " + stderr);
+                                    }
+                                    sdWriting = false;
+                                    fs.unlink(path);
+                                });
+                            });
+                        });
                     } else {
+                        sdWriting = false;
                         sendEvent('saveError', "Error saving RAW file " + dest + "\nError code: " + err + ", message: " + stderr);
                     }
+                } else {
+                    sdWriting = false;
                 }
-                sdWriting = false;
-                fs.unlink(path);
+                if(!sdWriting) fs.unlink(path);
             });
             if(options.index || options.index===0) {
                 var s = options.saveRaw.match(/(tl-[0-9]+)/i);
@@ -383,8 +398,6 @@ function capture(options, callback) {
             thumbnail: (options.thumbnail && supports.thumbnail) ? true : false,
             keepOnCamera: (options.removeFromCamera) ? false : true
         }
-        console.log("supports.thumbnail", supports.thumbnail);
-        console.log("options.thumbnail", options.thumbnail);
     }
     console.log("cameraOptions:", captureOptions);
     //console.log("options:", options);
@@ -411,25 +424,34 @@ function capture(options, callback) {
                             console.log("WORKER: running luminance calc on low-res preview...", lowResJpg.length, "bytes");
                             img = lowResJpg;
                         } else {
-                            console.log("WORKER: running luminance calc on full-res preview...");
+                            console.log("WORKER: running luminance calc on full-res preview...", photo.length, "bytes");
                             img = photo;
                         }
                         var startTime = new Date() / 1000;
-                        image.exposureValue(img, function(err, ev, histogram) {
-                            console.log("WORKER: adjusting ev by ", options.exposureCompensation);
-                            ev = ev + options.exposureCompensation;
-                            var processingTime = (new Date() / 1000) - startTime;
-                            console.log("WORKER: luminance calc complete. ev:", ev, "Processed in ", processingTime, "seconds");
-                            sendEvent('status', "photo ev: " + (Math.round(ev * 100) / 100));
-                            sendEvent('histogram', histogram);
-                            //sendEvent('ev', ev);
-                            if (callback) callback(err, {
-                                ev: ev,
-                                histogram: histogram,
+                        try {
+                            image.exposureValue(img, function(err, ev, histogram) {
+                                console.log("WORKER: adjusting ev by ", options.exposureCompensation);
+                                ev = ev + options.exposureCompensation;
+                                var processingTime = (new Date() / 1000) - startTime;
+                                console.log("WORKER: luminance calc complete. ev:", ev, "Processed in ", processingTime, "seconds");
+                                sendEvent('status', "photo ev: " + (Math.round(ev * 100) / 100));
+                                sendEvent('histogram', histogram);
+                                //sendEvent('ev', ev);
+                                if (callback) callback(err, {
+                                    ev: ev,
+                                    histogram: histogram,
+                                    file: info,
+                                    thumbnailPath: thumbnailFileFromIndex(options.index, options.cameraIndex)
+                                });
+                            });
+                        } catch(e) {
+                            if (callback) callback(e, {
+                                ev: null,
+                                histogram: null,
                                 file: info,
                                 thumbnailPath: thumbnailFileFromIndex(options.index, options.cameraIndex)
                             });
-                        });
+                        }
                     });
                 } else {
                     sendEvent('status', "photo saved to camera");
@@ -768,7 +790,7 @@ function set(item, value, callback) { // item can be 'iso', 'aperture', 'shutter
             if (toggle) {
                 console.log("WORKER:  (set " + item + " = " + value + ") (toggle)");
                 camera.setConfigValue(item, value, function(err) {
-                    console.log("WORKER: (1) error setting " + item + " to '" + value + "': ", err);
+                    if(err) console.log("WORKER: (1) error setting " + item + " to '" + value + "': ", err);
                     if (err) sendEvent('error', err);
                     if (callback) callback(err);
                 });
@@ -776,9 +798,17 @@ function set(item, value, callback) { // item can be 'iso', 'aperture', 'shutter
             }
             for (var i = 0; i < list.length; i++) {
                 if (list[i].cameraName == value || list[i].name == value) {
-                    console.log("WORKER:  (set " + item + " = " + value + ")");
-                    camera.setConfigValue(item, list[i].cameraName || value, function(err) {
-                        console.log("WORKER: (2) error setting " + item + " to '" + (list[i].cameraName || value) + "': ", err);
+                    value = list[i].cameraName;
+                    if(item == 'f-number' && camera.model.match(/sony/i) && port != "SonyWifi") {
+                        value = parseFloat(value);
+                        if(Math.round(value) == value) value += 0.000000001;
+                    }
+                    if(item == 'manualfocus' && camera.model.match(/sony/i) && port != "SonyWifi") {
+                        value = parseInt(value);
+                    }
+                    console.log("WORKER:  (set " + item + " = " + value + ") (" + typeof(value) + ")");
+                    camera.setConfigValue(item, value, function(err) {
+                        if(err) console.log("WORKER: (2) error setting " + item + " to '" + value + "': ", err);
                         if (err) sendEvent('error', err);
                         if (callback) callback(err);
                     });
@@ -792,7 +822,7 @@ function set(item, value, callback) { // item can be 'iso', 'aperture', 'shutter
         } else {
             console.log('WORKER: error', "item not found in list: " + item + " = [" + value + "] (trying anyway)");
             camera.setConfigValue(item, value, function(err) {
-                console.log("WORKER: (3) error setting " + item + " to '" + value + "': ", err);
+                if(err) console.log("WORKER: (3) error setting " + item + " to '" + value + "': ", err);
                 if (err) sendEvent('error', err);
                 if (callback) callback(err);
             });
@@ -850,6 +880,7 @@ function mapParam(type, value, halfs, manufacturer) {
     if(halfs) type += "Halfs";
     var list = LISTS[type];
     if (list && value != null) {
+        if(typeof value == 'number') value = Math.round(value * 100) / 100;
         value = value.toString().trim().toLowerCase();
         if(type == "aperture" && manufacturer == "OLYMPUS") {
             var origVal = value;
@@ -985,19 +1016,21 @@ function getConfig(noEvent, cached, cb) {
                             //console.log("processing item", item);
                             if (item == 'shutterspeed' && data.status && manufacturer == 'Sony Corporation') {
                                 console.log("WORKER: manually adding shutter speed list (" + (halfsUsed ? 'halfs' : 'thirds') + ")", data[section].children[item].choices);
-                                supports.thumbnail = false; // sony USB doesn't support thumbnail-only capture
+                                //supports.thumbnail = false; // sony USB doesn't support thumbnail-only capture
                                 var l = halfsUsed ? LISTS.shutterHalfs : LISTS.shutter;
+                                data[section].children[item].choices = [];
                                 for (var j = 0; j < l.length; j++) {
-                                    if(l[j].values.length > 1) data[section].children[item].choices.push(l[j].values[0]); // sony doesn't report available shutter speeds, so define them here
+                                    if(l[j].values.length > 1 && l[j].ev >= -11) data[section].children[item].choices.push(l[j].values[0]); // sony doesn't report available shutter speeds, so define them here
                                 }
-                            } /* else if (item == 'f-number' && data.status && manufacturer == 'Sony Corporation') {
+                            }  else if (item == 'f-number' && data.status && manufacturer == 'Sony Corporation') {
                                 console.log("WORKER: manually adding aperture value list (" + (halfsUsed ? 'halfs' : 'thirds') + ")", data[section].children[item].choices);
-                                supports.thumbnail = false; // sony USB doesn't support thumbnail-only capture
+                                //supports.thumbnail = false; // sony USB doesn't support thumbnail-only capture
                                 var l = halfsUsed ? LISTS.apertureHalfs : LISTS.aperture;
+                                data[section].children[item].choices = [];
                                 for (var j = 0; j < l.length; j++) {
                                     if(l[j].values.length > 1) data[section].children[item].choices.push(l[j].values[0]); // sony doesn't report available aperture values, so define them here
                                 }
-                            }*/
+                            }
                         } catch (e) {
                             console.log("WORKER: error manually adding shutter speeds/aperture values:", e);
                         }

@@ -8,7 +8,7 @@ var moment = require('moment');
 require('rootpath')();
 var power = require('hardware/power.js');
 var gps = new GPS;
-var MCU_VERSION = 2;
+var MCU_VERSION = 2;//10;
 
 
 var mcu = new EventEmitter();
@@ -21,6 +21,7 @@ mcu.knob = 0;
 mcu.tzAutoSet = false;
 mcu.customLatitude = null;
 mcu.customLongitude = null;
+mcu.disableGpsTimeUpdate = false;
 
 mcu.init = function(callback) {
 	_connectSerial('/dev/ttyS1', function(err, version) {
@@ -104,7 +105,7 @@ function _getVersion(callback) {
 
 function _programMcu(callback) {
 	console.log("progamming MCU...");
-	exec("/usr/bin/test -e /home/view/current/firmware/mcu.hex && /usr/local/bin/avrdude -C /etc/avrdude.conf -P gpio -c gpio0 -p t841 -U lfuse:w:0xc2:m && /usr/local/bin/avrdude -C /etc/avrdude.conf -P gpio -c gpio0 -p t841 -e && /usr/local/bin/avrdude -C /etc/avrdude.conf -P gpio -c gpio0 -p t841 -U flash:w:/home/view/current/firmware/mcu.hex:i", function(err) {
+	exec("test -e /lib/arm-linux-gnueabihf/libusb--disabled--0.1.so.4 && mv /lib/arm-linux-gnueabihf/libusb--disabled--0.1.so.4 /lib/arm-linux-gnueabihf/libusb-0.1.so.4; /usr/bin/test -e /home/view/current/firmware/mcu.hex && /usr/local/bin/avrdude -C /etc/avrdude.conf -P gpio -c gpio0 -p t841 -U lfuse:w:0xc2:m && /usr/local/bin/avrdude -C /etc/avrdude.conf -P gpio -c gpio0 -p t841 -e && /usr/local/bin/avrdude -C /etc/avrdude.conf -P gpio -c gpio0 -p t841 -U flash:w:/home/view/current/firmware/mcu.hex:i; test -e /lib/arm-linux-gnueabihf/libusb-0.1.so.4 && mv /lib/arm-linux-gnueabihf/libusb-0.1.so.4 /lib/arm-linux-gnueabihf/libusb--disabled--0.1.so.4", function(err) {
 		if(err) {
 			console.log("MCU programming failed");
 		} else {
@@ -132,7 +133,7 @@ function _parseData(data) {
 			gps.update(data);
 			if(gps.state.fix && gps.state.lat !== null && gps.state.lon !== null) {
 				mcu.lastGpsFix = _.clone(gps.state);
-				if(!gpsFix) {
+				if(!gpsFix && !mcu.disableGpsTimeUpdate) {
 					mcu.setDateTime(mcu.lastGpsFix.time);
 					var tz = geoTz.tz(mcu.lastGpsFix.lat, mcu.lastGpsFix.lon);
 					if(tz && process.env.TZ != tz) {

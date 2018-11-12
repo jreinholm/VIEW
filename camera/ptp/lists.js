@@ -386,7 +386,7 @@ lists.getEvFromSettings = function(cameraSettings) {
 
 lists.format = [{
     name: "RAW",
-    values: ['RAW', 'raw', 'NEF (Raw)', 'mRAW', 'sRAW', '3', 'NEF+Fine']
+    values: ['RAW', 'raw', 'NEF (Raw)', 'mRAW', 'sRAW', '3', 'NEF+Fine', 'Large Fine JPEG', 'Unknown value 0007']
 }, {
     name: "RAW+JPEG",
     values: ['RAW+JPEG', 'raw+jpeg', 'Unknown value 0012']
@@ -927,18 +927,18 @@ lists.shutterAll = [{
 //    name: "2m",
 //    ev: -13,
 //    values: ['64000030']
-//}, {
-//    name: "60s",
-//    ev: -12,
-//    values: ['64000000', '60']
-//}, {
-//    name: "50s",
-//    ev: -11 - 2 / 3,
-//    values: ['50796833', '50']
-//}, {
-//    name: "40s",
-//    ev: -11 - 1 / 3,
-//    values: ['40317473', '40']
+}, {
+    name: "60s",
+    ev: -12,
+    values: ['600/10','64000000', '60']
+}, {
+    name: "50s",
+    ev: -11 - 2 / 3,
+    values: ['500/10', '50796833', '50']
+}, {
+    name: "40s",
+    ev: -11 - 1 / 3,
+    values: ['400/10', '40317473', '40']
 }, {
     name: "30s",
     ev: -11,

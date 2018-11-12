@@ -13,7 +13,7 @@ var baseInstallPath = "/home/view/";
 var kernelVersion = "#51 PREEMPT Thu Jan 5 13:15:18 EST 2017";
 var uBootVersion = "U-Boot SPL 2016.01 TL+ VIEW -00446-g12f229e-dirty (Dec 23 2016 - 17:47:10)";
 
-var libgphoto2Version = "2.5.14.17";
+var libgphoto2Version = "2.5.14.23";
 
 var getLibGPhoto2Version = "/usr/local/bin/gphoto2 --version | grep \"libgphoto2 \"";
 var installLibGPhoto2 = "/usr/bin/test -e /home/view/current/lib/libgphoto2_" + libgphoto2Version + "-1_armhf.deb && dpkg -i /home/view/current/lib/libgphoto2_" + libgphoto2Version + "-1_armhf.deb";
@@ -27,6 +27,53 @@ var getUBootVersion = "/bin/dd if=/dev/mmcblk0 bs=1024 count=32 | /usr/bin/strin
 var doUBootUpdate = "/usr/bin/test -e /home/view/current/boot/u-boot-sunxi-with-spl.bin && /bin/dd if=/home/view/current/boot/u-boot-sunxi-with-spl.bin of=/dev/mmcblk0 bs=1024 seek=8";
 
 var installIcons = "/usr/bin/test -e /home/view/current/fonts/icons.ttf && cp -u /home/view/current/fonts/icons.ttf /usr/share/fonts/truetype/";
+
+function logDateHelper(logFileName) {
+	var m = logFileName.match(/[a-z\/\-]+([0-9][0-9][0-9][0-9])([0-9][0-9])([0-9][0-9])-([0-2][0-9])([0-5][0-9])([0-5][0-9])\.txt/);
+	if(m) {
+		var year = parseInt(m[1]);
+		var month = parseInt(m[2]) - 1;
+		var day = parseInt(m[3]);
+		var hour = parseInt(m[4]);
+		var minute = parseInt(m[5]);
+		var second = parseInt(m[6]);
+		var date = new Date(year, month, day, hour, minute, second, 0);
+		//console.log(date);
+		return date;
+	} else {
+		return null;
+		console.log("LOG CLEANUP: no match:", logFileName);
+	}
+}
+
+function logPurgeHelper(logList, numberToKeep) {
+	if(logList && logList.length > numberToKeep) {
+		logList = logList.filter(function(l) { return logDateHelper(l);});
+		if(logList && logList.length > numberToKeep) {
+			logList.sort(function(a, b) {
+				return logDateHelper(b) - logDateHelper(a);
+			});
+			for(var i = numberToKeep; i < logList.length; i++) {
+				console.log("LOG CLEANUP: deleting", logList[i]);
+				fs.unlink(logList[i]);
+			}
+		}
+	}
+}
+
+function cleanupLogs() {
+	exec('ls /var/log/view-*', function(err, res) {
+		if(!err && res) {
+			var logs = res.trim().split('\n');
+			var uiLogs = logs.filter(function(l){return l.indexOf('ui')>0});
+			var coreLogs = logs.filter(function(l){return l.indexOf('core')>0});
+			logPurgeHelper(uiLogs, 2);
+			logPurgeHelper(coreLogs, 10);
+		}
+	});
+}
+
+cleanupLogs(); // run on each start
 
 function checkLibGPhotoUpdate(callback) {
 	exec(getLibGPhoto2Version, function(err, stdout, stderr) {
@@ -84,13 +131,15 @@ function apiRequest(method, callback) {
 	});
 }
 
+var dl = null;
 function download(href, path, progressCallback, callback) {
     console.log("UPDATES: downloading " + href);
     var downloadSize = null;
-	var dl = wget.download(href, path, {headers: {'user-agent': 'VIEW-app'}});
+	dl = wget.download(href, path, {headers: {'user-agent': 'VIEW-app'}});
 	dl.on('error', function(err) {
 	    console.log("UPDATES: download error: ", err);
 		callback(err);
+		dl = null;
 	});
 	dl.on('start', function(fileSize) {
 	    downloadSize = fileSize;
@@ -98,43 +147,25 @@ function download(href, path, progressCallback, callback) {
 	});
 	dl.on('end', function(output) {
 	    console.log("UPDATES: download complete: ", output);
-		callback(null, path);
+	    if(dl.cancelled) {
+			callback("cancelled");
+	    } else {
+			callback(null, path);
+	    }
+		dl = null;
 	});
 	dl.on('progress', function(bytesDownloaded) {
 		progressCallback && progressCallback(bytesDownloaded, downloadSize);
 	});
-	//var options = url.parse(href);
-	//options.headers = {'user-agent': 'VIEW-app'};
-	//options.method = "GET";
-	////options.auth = username+':'+accessToken;
-
-	//var req = https.get(options, function(res) {
-	//	//console.log(`STATUS: ${res.statusCode}`);
-	//	//console.log(`HEADERS: ${JSON.stringify(res.headers)}`);
-	//	if(res.statusCode == 302 && res.headers.location) {
-	//		download(res.headers.location, path, callback);
-	//		return;
-	//	}
-	//	var fd = fs.openSync(path, 'w');
-	//	if(!fd) callback("error creating " + path);
-	//	res.on('data', function(chunk) {
-	//		var bytes = 0;
-	//		if(fd) bytes = fs.writeSync(fd, chunk, 0, chunk.length);
-	//		//console.log("Writing " + bytes + " bytes to file ", fd, chunk.length);
-	//	});
-	//	res.on('end', function() {
-	//		if(fd) {
-	//			fs.closeSync(fd);
-	//			callback(null, path);
-	//		}
-	//	});
-
-	//});
-	//req.end();
-	//req.on('error', function(err) {
-	//	callback(err);
-	//});
 }
+
+function cancelDownload() {
+	if(dl && dl.req && dl.req.abort) {
+		dl.cancelled = true;
+		dl.req.abort();
+	}
+}
+
 
 function extract(zipPath, destFolder, callback) {
 	exec("test -e " + destFolder + '_zip_extract' + " && rm -rf " + destFolder + '_zip_extract', function(err){
@@ -517,6 +548,7 @@ exports.getValidVersionFromSdCard = function(callback) {
 
 
 exports.download = download;
+exports.cancel = cancelDownload;
 exports.extract = extract;
 exports.apiRequest = apiRequest;
 

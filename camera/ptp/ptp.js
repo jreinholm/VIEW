@@ -53,6 +53,7 @@ camera.cameraList = function(callback) {
 }
 
 camera.switchPrimary = function(cameraObject, callback) {
+    if(camera.lvOn) camera.lvOff();
     if(cameraObject._port) {
         console.log("switching primary camera to ", cameraObject.model);            
         var index = getWorkerIndex(cameraObject._port);
@@ -203,12 +204,13 @@ var startWorker = function(port) {
                     worker.supports.destination = true;
                     if(worker.model != 'SonyWifi' && worker.model.match(/sony/i)) {
                         worker.supports.thumbnail = false;
-                        if(worker.model.match(/(a6300|A7r II|A7r III|A7s II|A7 II|ILCE-7M2|ILCE-7M2|A7s|a6500|a99 M2|a99 II|a77 II|a68|A9)/i)) {
+                        if(worker.model.match(/(a6300|A7r II|A7r III|A7s II|A7 II|A7 III|ILCE-7M2|ILCE-7M2|A7s|a6500|a99 M2|a99 II|a77 II|a68|A9)/i)) {
                             worker.supports.liveview = true;
                         }
-                        if(worker.model.match(/(A7r III|A9)/i)) {
+                        if(worker.model.match(/(A7r III|A9|A7 III)/i)) {
                             console.log("PTP: matched sony, setting supports.destination = true");
                             worker.supports.destination = true;
+                            worker.supports.thumbnail = true;
                             worker.supports.focus = true;
                         } else {
                             console.log("PTP: matched sony, setting supports.destination = false");
@@ -530,6 +532,25 @@ camera.capture = function(options, callback) {
     if(!camera.connected) {
         return callback && callback("not connected");
     }
+
+    if(camera.lvOn === true && camera.model && camera.model.match(/fuji/i)) {
+        if(restartPreview) {
+            clearTimeout(restartPreview);
+            restartPreview = null;
+        }
+        console.log("PTP: turning off LV for capture");
+        return camera.lvOff(function(){
+            camera.capture(options, function(err, res) {
+                restartPreview = setTimeout(function(){
+                    restartPreview = null;
+                    console.log("PTP: resuming LV");
+                    camera.preview();
+                }, 1000);
+                callback && callback(err, res);
+            });
+        }, true);
+    }
+
     var primaryWorker = getPrimaryWorker();
     primaryWorker.captureInitiated = true;
     if(options && options.mode == 'test') {
@@ -891,11 +912,11 @@ function focusSony(step, repeat, callback) {
     var param;
     if (!step) return callback && callback(null, camera.focusPos);
     if (step < 0) {
-        param = '-1';
-        if (step < -1) param = '-5';
+        param = -2.01;
+        if (step < -1) param = -5.01;
     } else {
-        param = '1';
-        if (step > 1) param = '5';
+        param = 1.99;
+        if (step > 1) param = 4.99;
     }
 
     if(Math.abs(step) == 1) {
@@ -941,19 +962,21 @@ function focusSony(step, repeat, callback) {
 function focusNikon(step, repeat, callback) {
     var worker = getPrimaryWorker();
     if (!repeat) repeat = 1;
-    var param, delay = 200;
+    var param;
     if (!step) return callback && callback(null, camera.focusPos);
+    var baseMove = worker.model.match(/nikon dsc z/i) ? 50 : 20;
+    var delay = worker.model.match(/nikon dsc z/i) ? 50 : 200;
     if (step < 0) {
-        param = -20.5;
+        param = -(baseMove + 0.5);
         if (step < -1) { 
-            param = -200.5;
-            delay = 500;
+            param = -(baseMove * 10 + 0.5);
+            delay *= 2;
         }
     } else {
-        param = 20.5;
+        param = baseMove + 0.5;
         if (step > 1) {
-            param = 200.5;
-            delay = 500;
+            param = baseMove * 10 + 0.5;
+            delay *= 2;
         }
     }
 
@@ -970,7 +993,7 @@ function focusNikon(step, repeat, callback) {
             worker.send({
                 type: 'camera',
                 setDirect: 'manualfocusdrive',
-                value: param,
+                value: param + Math.random() / 100,
                 id: getCallbackId(worker.port, 'focusNikon', function(err) {
                     if(err) {
                         errCount++;

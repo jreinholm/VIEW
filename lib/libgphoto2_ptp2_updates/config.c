@@ -1407,7 +1407,7 @@ _put_sony_value_##bits (PTPParams*params, uint16_t prop, inttype value,int useen
 	inttype			origval;						\
 	time_t			start,end;						\
 											\
-	GP_LOG_D("setting 0x%04x to 0x%08x", prop, value);				\
+	GP_LOG_E("setting 0x%04x to 0x%08x", prop, value);				\
 											\
 	/*C_PTP_REP (ptp_generic_getdevicepropdesc (params, prop, &dpd));			\
 	if (value == dpd.CurrentValue.bits) {						\
@@ -1434,7 +1434,7 @@ _put_sony_value_##bits (PTPParams*params, uint16_t prop, inttype value,int useen
 				gp_context_error (context, _("Target value is not in enumeration."));\
 				return GP_ERROR_BAD_PARAMETERS;				\
 			}								\
-			GP_LOG_D("posnew %d, posorig %d, value %d", posnew, posorig, value);	\
+			GP_LOG_E("posnew %d, posorig %d, value %d", posnew, posorig, value);	\
 			if (posnew == posorig)						\
 				break;							\
 			if (posnew > posorig)						\
@@ -1474,7 +1474,7 @@ _put_sony_value_##bits (PTPParams*params, uint16_t prop, inttype value,int useen
 		} while (end-start <= 3);						\
 											\
 		if (dpd.CurrentValue.bits == value) {					\
-			GP_LOG_D ("Value matched!");					\
+			GP_LOG_E ("Value matched!");					\
 			break;								\
 		}									\
 		if (dpd.CurrentValue.bits == origval) {					\
@@ -1498,11 +1498,11 @@ _put_sony_value_##bits (PTPParams*params, uint16_t prop, inttype value,int useen
 			GP_LOG_D("posnow %d, value %d", posnow, dpd.CurrentValue.bits);	\
 			if ((posnow == 0) && (propval.u8 == 0xff)) {			\
 				gp_context_error (context, _("Sony was not able to set the new value, is it valid?"));	\
-				GP_LOG_D ("hit bottom of enumeration, not good.");	\
+				GP_LOG_E ("hit bottom of enumeration, not good.");	\
 				return GP_ERROR;					\
 			}								\
 			if ((posnow == dpd.FORM.Enum.NumberOfValues-1) && (propval.u8 == 0x01)) {			\
-				GP_LOG_D ("hit top of enumeration, not good.");		\
+				GP_LOG_E ("hit top of enumeration, not good.");		\
 				gp_context_error (context, _("Sony was not able to set the new value, is it valid?"));	\
 				return GP_ERROR;					\
 			}								\
@@ -5524,6 +5524,7 @@ _put_Nikon_MFDrive(CONFIG_PUT_ARGS) {
 		flag = 0x2;
 	}
 	if (!xval) xval = 1;
+	nikon_wait_busy (&camera->pl->params, 20, 1000);
 	ret = LOG_ON_PTP_E (ptp_nikon_mfdrive (&camera->pl->params, flag, xval));
 	if (ret == PTP_RC_NIKON_NotLiveView) {
 		gp_context_error (context, _("Nikon manual focus works only in LiveView mode."));
@@ -6408,7 +6409,7 @@ _put_Sony_ManualFocus(CONFIG_PUT_ARGS)
 	CR (gp_widget_get_value(widget, &val));
 
 	if(val != 0.0) {
-		xpropval.u16 = 2;
+		xpropval.u16 = 1;
 		C_PTP (ptp_sony_setdevicecontrolvalueb (params, 0xd2d2, &xpropval, PTP_DTC_UINT16));
 		if(val <= -7) xpropval.u16 = 0xFFFF - 6;
 		else if(val <= -6.0) xpropval.u16 = 0xFFFF - 5;
@@ -7592,7 +7593,7 @@ static struct submenu camera_settings_menu[] = {
 /* virtual */
 	{ N_("Fast Filesystem"),	"fastfs",	0,  PTP_VENDOR_NIKON,   0,  _get_Nikon_FastFS,      _put_Nikon_FastFS },
 	{ N_("Capture Target"),		"capturetarget",0,  PTP_VENDOR_NIKON,   0,  _get_CaptureTarget,     _put_CaptureTarget },
-//	{ N_("Capture Target"),		"capturetarget",0,  PTP_VENDOR_SONY,   0,  _get_CaptureTarget,     _put_CaptureTarget },
+	{ N_("Capture Target"),		"capturetarget",0,  PTP_VENDOR_SONY,   0,  _get_CaptureTarget,     _put_CaptureTarget },
 	{ N_("Autofocus"),		"autofocus",    0,  PTP_VENDOR_NIKON,   0,  _get_Autofocus,         _put_Autofocus },
 	{ N_("Capture Target"),		"capturetarget",0,  PTP_VENDOR_CANON,   0,  _get_CaptureTarget,     _put_CaptureTarget },
 	{ N_("CHDK"),     		"chdk",		PTP_OC_CHDK,  PTP_VENDOR_CANON,   0,  _get_CHDK,     _put_CHDK },
@@ -8125,9 +8126,11 @@ _get_config (Camera *camera, const char *confname, CameraWidget **outwidget, Cam
 					gp_list_append (list, cursub->name, NULL);
 					continue;
 				}
-				GP_LOG_D ("Getting property '%s' / 0x%04x", cursub->label, cursub->propid );
+				//GP_LOG_D ("Getting EOS property '%s' / 0x%04x", cursub->label, cursub->propid );
 				memset(&dpd,0,sizeof(dpd));
 				ptp_canon_eos_getdevicepropdesc (params,cursub->propid, &dpd);
+				GP_LOG_D ("Getting EOS property '%s' / 0x%04x, current=0x%04x, default=0x%04x", cursub->label, cursub->propid, dpd.CurrentValue.u16, dpd.FactoryDefaultValue.u16);
+
 				ret = cursub->getfunc (camera, &widget, cursub, &dpd);
 				ptp_free_devicepropdesc(&dpd);
 				if (ret != GP_OK) {
